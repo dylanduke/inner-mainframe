@@ -1,153 +1,107 @@
+// src/game/CanvasGame.tsx
 import React, { useEffect, useRef, type JSX } from "react";
-import { TILE, SHAPES, rotateCells, normalize, shapeBounds, type ShapeKey } from "@inner-mainframe/game-logic"; 
-import { green } from "@mui/material/colors";
+import {
+  createGame,
+  step,
+  DEFAULT_PARAMS,
+  shapeCells,
+  type GameState,
+  type Inputs,
+  TILE, // optional; not required for drawing here
+} from "@inner-mainframe/game-logic";
 
-const LOGICAL_W = 500; // width in CSS pixels
-const LOGICAL_H = 750; // height in CSS pixels
-
-function clamp(v: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, v));
-}
-
-function drawShape(
-  ctx: CanvasRenderingContext2D,
-  type: ShapeKey,
-  x: number,
-  y: number,
-  rot = 0,
-) {
-  const base = SHAPES[type];
-  const cells = normalize(rotateCells(base, rot));
-  ctx.fillStyle = "#00ff7f";
-  ctx.strokeStyle = "rgba(0,0,0,0.35)";
-  ctx.lineWidth = 1;
-
-  for (const [cx, cy] of cells) {
-    const px = x + cx * TILE;
-    const py = y + cy * TILE;
-    ctx.fillRect(px, py, TILE, TILE);
-    // inset stroke so it looks crisp on DPR>1
-    ctx.strokeRect(px + 0.5, py + 0.5, TILE - 1, TILE - 1);
-  }
-}
+const BOARD_W = 10;
+const BOARD_H = 20;
 
 export default function CanvasGame(): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const statsRef = useRef<HTMLDivElement | null>(null);
 
-  // runtime state
+  // runtime
   const runningRef = useRef(true);
-  const rafRef = useRef<number>(0);
-  const tPrevRef = useRef<number>(0);
+  const rafRef = useRef(0);
+  const tPrevRef = useRef(0);
   const accRef = useRef(0);
-  const inputRef = useRef({
-    left: false,
-    right: false,
-    up: false,
-    down: false,
-  });
 
-  const world = useRef({
-    width: LOGICAL_W,
-    height: LOGICAL_H,
-    bg: "#0b1220",
-  }).current;
-
-  // player starts as L piece (per request)
-  const playerRef = useRef({
-    type: "L" as ShapeKey,
-    x: 60,
-    y: 60,
-    rot: 0,
-    speed: 220,
-    color: green,
-  });
-
-  type Entity = {
-    type: ShapeKey;
-    x: number;
-    y: number;
-    rot: number;
-    color?: string;
-  };
-  const entitiesRef = useRef<Entity[]>([]);
+  // game state + inputs
+  const gameRef = useRef<GameState>(createGame(BOARD_W, BOARD_H, 0xC0FFEE));
+  const inputsRef = useRef<Inputs>({});
 
   useEffect(() => {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d", { alpha: false })!;
-    const DPR = Math.min(2, window.devicePixelRatio || 1);
 
-    // Set fixed CSS size + scale backing store by DPR for crispness
-    canvas.style.width = `${LOGICAL_W}px`;
-    canvas.style.height = `${LOGICAL_H}px`;
-    canvas.width = Math.floor(LOGICAL_W * DPR);
-    canvas.height = Math.floor(LOGICAL_H * DPR);
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-
-    // seed a small “bank” row of shapes for reference
-    if (entitiesRef.current.length === 0) {
-      const order: ShapeKey[] = ["I", "O", "L", "J", "Z", "S", "T"];
-      let ox = 16;
-      for (const t of order) {
-        entitiesRef.current.push({ type: t, x: ox, y: 16, rot: 0 });
-        ox += 5 * TILE;
-      }
+    // --- Responsive canvas with board aspect (1:2) ---
+    function layout() {
+      const MARGIN_X = 24;
+      const MARGIN_Y = 24;
+      const SCALE_MULTIPLIER = 0.85; // ← reduce overall canvas size by 15%
+    
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const aspect = BOARD_H / BOARD_W; // 2
+    
+      const maxByWidth  = Math.max(0, vw - MARGIN_X);
+      const maxByHeight = Math.max(0, (vh - MARGIN_Y) / aspect);
+    
+      let cssW = Math.floor(Math.min(maxByWidth, maxByHeight));
+      cssW = Math.floor(cssW * SCALE_MULTIPLIER); // apply proportional shrink
+      const cssH = Math.floor(cssW * aspect);
+    
+      const DPR = Math.min(2, window.devicePixelRatio || 1);
+      canvas.style.width  = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      canvas.width  = Math.floor(cssW * DPR);
+      canvas.height = Math.floor(cssH * DPR);
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     }
+    
+    
 
-    // helper: rotate player and re-clamp to bounds
-    function rotatePlayer(dir: 1 | -1) {
-      const p = playerRef.current;
-      p.rot = (((p.rot + dir) % 4) + 4) % 4;
-      const b = shapeBounds(p.type, p.rot);
-      p.x = clamp(p.x, 0, world.width - b.w);
-      p.y = clamp(p.y, 0, world.height - b.h);
+    function onResize() {
+      layout();
+      draw(); // redraw immediately after resize
     }
+    window.addEventListener("resize", onResize);
+    layout();
 
-    // input handling
+    // --- Input handling ---
     function onKey(e: KeyboardEvent, down: boolean) {
+      if ((e.key === "p" || e.key === "P") && down) {
+        runningRef.current = !runningRef.current;
+        if (runningRef.current) {
+          tPrevRef.current = performance.now();
+          accRef.current = 0;
+          loop();
+        } else {
+          cancelAnimationFrame(rafRef.current);
+        }
+        return;
+      }
+
+      if (down && !e.repeat) {
+        if (e.key === "r" || e.key === "R") inputsRef.current.respawn = true;
+        if (e.key === "ArrowUp") inputsRef.current.rotCW = true;
+        if (e.key === "q" || e.key === "Q") inputsRef.current.rotCCW = true;
+        if (e.key === "e" || e.key === "E") inputsRef.current.rotCW = true;
+        if (e.key === " ") inputsRef.current.hardDrop = true;
+      }
+
       switch (e.key) {
         case "ArrowLeft":
         case "a":
         case "A":
-          inputRef.current.left = down;
+          inputsRef.current.left = down;
           break;
         case "ArrowRight":
         case "d":
         case "D":
-          inputRef.current.right = down;
-          break;
-        case "ArrowUp":
-        case "w":
-        case "W":
-          inputRef.current.up = down;
-          if (down && !e.repeat) rotatePlayer(+1);
+          inputsRef.current.right = down;
           break;
         case "ArrowDown":
         case "s":
         case "S":
-          inputRef.current.down = down;
-          break;
-        case "q":
-        case "Q":
-          if (down && !e.repeat) rotatePlayer(-1);
-          break;
-        case "e":
-        case "E":
-          if (down && !e.repeat) rotatePlayer(+1);
-          break;
-        case "p":
-        case "P":
-          if (down) {
-            runningRef.current = !runningRef.current;
-            if (runningRef.current) {
-              // reset timing on resume
-              tPrevRef.current = performance.now();
-              accRef.current = 0;
-              loop();
-            } else {
-              cancelAnimationFrame(rafRef.current);
-            }
-          }
+          inputsRef.current.softDrop = down;
           break;
       }
     }
@@ -156,69 +110,89 @@ export default function CanvasGame(): JSX.Element {
     window.addEventListener("keydown", kd);
     window.addEventListener("keyup", ku);
 
-    // fixed-step update
-    const FIXED_DT = 1 / 60;
+    // --- Draw helpers (cells fill canvas exactly) ---
+    function getCellSize() {
+      // Use the canvas *CSS* size for drawing in CSS pixels
+      const cssW = canvas.clientWidth;
+      const cssH = canvas.clientHeight;
+      return {
+        cell: cssW / BOARD_W,   // width per cell
+        cssW,
+        cssH,                   // equals cell * BOARD_H by construction
+      };
+    }
 
-    function update(dt: number) {
-      const p = playerRef.current;
-      const ip = inputRef.current;
-      const b = shapeBounds(p.type, p.rot);
-
-      const ax = (ip.right ? 1 : 0) - (ip.left ? 1 : 0);
-      const ay = (ip.down ? 1 : 0) - (ip.up ? 1 : 0);
-
-      p.x += ax * p.speed * dt;
-      p.y += ay * p.speed * dt;
-
-      // keep player inside canvas considering current rotation footprint
-      p.x = clamp(p.x, 0, world.width - b.w);
-      p.y = clamp(p.y, 0, world.height - b.h);
+    function drawCell(gx: number, gy: number) {
+      const { cell } = getCellSize();
+      const x = gx * cell;
+      const y = gy * cell;
+      // constant green
+      ctx.fillStyle = "#00ff7f";
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.lineWidth = 1;
+      ctx.fillRect(x, y, cell, cell);
+      ctx.strokeRect(x + 0.5, y + 0.5, cell - 1, cell - 1);
     }
 
     function draw() {
-      const { width: W, height: H, bg } = world;
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, H);
+      const { cssW, cssH } = getCellSize();
 
-      // reference shapes
-      for (const e of entitiesRef.current) {
-        drawShape(ctx, e.type, e.x | 0, e.y | 0, e.rot);
+      // background
+      ctx.fillStyle = "#0b1220";
+      ctx.fillRect(0, 0, cssW, cssH);
+
+      // playfield bg (optional subtle contrast)
+      ctx.fillStyle = "#0e1626";
+      ctx.fillRect(0, 0, cssW, cssH);
+
+      // board cells
+      const s = gameRef.current;
+      for (let y = 0; y < s.boardH; y++) {
+        for (let x = 0; x < s.boardW; x++) {
+          if (s.board[y][x]) drawCell(x, y);
+        }
       }
 
-      // player
-      const p = playerRef.current;
-      drawShape(ctx, p.type, p.x | 0, p.y | 0, p.rot);
+      // active piece
+      const p = s.active;
+      if (p) {
+        const cells = shapeCells(p.type, p.rot);
+        for (const [cx, cy] of cells) {
+          const gx = p.x + cx;
+          const gy = p.y + cy;
+          if (gy >= 0) drawCell(gx, gy);
+        }
+      }
+
+      // outline
+      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(0, 0, cssW, cssH);
 
       // HUD
       ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.font = "16px ui-sans-serif, system-ui, -apple-system, Segoe UI";
-      ctx.fillText(
-        "Move: WASD/Arrows  •  Rotate: Q/E or ↑  •  P: Pause",
-        12,
-        22,
-      );
+      ctx.font = "14px ui-sans-serif, system-ui";
+      ctx.fillText("←/→ move • ↑/Q/E rotate • ↓ soft • Space hard • R respawn • P pause", 12, 22);
     }
 
-    // simple FPS meter
-    let frames = 0;
-    let last = performance.now();
-    function updateStats(now: number) {
-      frames++;
-      if (now - last > 500) {
-        const fps = Math.round((frames * 1000) / (now - last));
-        frames = 0;
-        last = now;
-        if (statsRef.current) {
-          statsRef.current.textContent = `${LOGICAL_W}×${LOGICAL_H} (backing ${canvas.width}×${canvas.height}) • DPR ${Math.min(2, window.devicePixelRatio || 1)} • ${fps} FPS`;
-        }
-      }
+    // --- Fixed-step game loop ---
+    const FIXED_DT = 1 / 60;
+    let frames = 0, last = performance.now();
+
+    function update(dt: number) {
+      step(gameRef.current, inputsRef.current, dt * 1000, DEFAULT_PARAMS);
+      // clear one-shots
+      inputsRef.current.rotCW = false;
+      inputsRef.current.rotCCW = false;
+      inputsRef.current.hardDrop = false;
+      inputsRef.current.respawn = false;
     }
 
     function loop() {
       if (!runningRef.current) return;
-      const tNow = performance.now();
-      let dt = (tNow - tPrevRef.current) / 1000;
-      tPrevRef.current = tNow;
+      const now = performance.now();
+      let dt = (now - tPrevRef.current) / 1000;
+      tPrevRef.current = now;
 
       accRef.current += dt;
       while (accRef.current >= FIXED_DT) {
@@ -226,43 +200,55 @@ export default function CanvasGame(): JSX.Element {
         accRef.current -= FIXED_DT;
       }
       draw();
-      updateStats(tNow);
+
+      // FPS stat
+      frames++;
+      if (now - last > 500) {
+        const fps = Math.round((frames * 1000) / (now - last));
+        frames = 0; last = now;
+        if (statsRef.current) statsRef.current.textContent = `DPR ${Math.min(2, window.devicePixelRatio||1)} • ${fps} FPS`;
+      }
+
       rafRef.current = requestAnimationFrame(loop);
     }
 
-    // initialize timing and start
+    // start
     tPrevRef.current = performance.now();
     accRef.current = 0;
     loop();
 
     return () => {
       cancelAnimationFrame(rafRef.current);
+      window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", kd);
       window.removeEventListener("keyup", ku);
     };
-  }, [world]);
+  }, []);
 
-  // replace your return with this
+  // center the canvas on the page
   return (
     <div
       style={{
-        minHeight: "100dvh",
-        display: "grid",
-        placeItems: "center",
-        background: "#0a0f1a", // optional
+        width: "100vw",
+        height: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#0a0f1a",
       }}
     >
-      <div className="stage" style={{ display: "grid", gap: 8 }}>
-        <canvas ref={canvasRef} />
-        <div
-          className="stats"
-          ref={statsRef}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+        <canvas
+          ref={canvasRef}
           style={{
-            color: "#cbd5e1",
-            fontFamily: "ui-sans-serif, system-ui",
-            fontSize: 12,
-            textAlign: "center",
+            border: "2px solid #1f2937",
+            borderRadius: 8,
+            boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
           }}
+        />
+        <div
+          ref={statsRef}
+          style={{ color: "#cbd5e1", fontFamily: "ui-sans-serif, system-ui", fontSize: 12, textAlign: "center" }}
         />
       </div>
     </div>
