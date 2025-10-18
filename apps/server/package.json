@@ -12,7 +12,8 @@
       "cors": "^2.8.5",
       "express": "^4.19.2",
       "@inner-mainframe/game-logic": "workspace:*",
-      "@inner-mainframe/net-protocol": "workspace:*"
+      "@inner-mainframe/net-protocol": "workspace:*",
+      "@hackvegas-2025/shared": "workspace:*"
     },
     "devDependencies": {
       "tsx": "^4.19.1",

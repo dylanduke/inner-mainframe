@@ -12,7 +12,8 @@
   "dependencies": {
     "colyseus.js": "^0.16.21",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "@hackvegas-2025/shared": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
