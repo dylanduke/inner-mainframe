@@ -15,7 +15,7 @@ export const DEFAULT_PARAMS: GameParams = {
     return base * (level + 1);
   },
   levelUp(total) {
-    // e.g., every 5 lines
-    return Math.floor(total / 5);
+    // e.g., every 3 lines
+    return Math.floor(total / 3);
   },
 };

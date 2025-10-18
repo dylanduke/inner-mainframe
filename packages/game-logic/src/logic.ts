@@ -1,4 +1,4 @@
-import type { GameParams, GameState, Inputs, Piece } from "./types";
+import { type GameParams, type GameState, type Inputs, type Piece, HIDDEN_ROWS } from "./types";
 import { DEFAULT_PARAMS } from "./params";
 import { RNG } from "./rng";
 import { generateBag } from "./bag";
@@ -6,10 +6,13 @@ import { makeBoard, collides, lockToBoard, fullRows, clearRows, shapeCells } fro
 import type { ShapeKey } from "./shapes";
 
 export function createGame(boardW = 10, boardH = 20, seed = 1234): GameState {
+  const totalH = boardH + HIDDEN_ROWS;
   const state: GameState = {
+    gameOver: false,
     tick: 0,
-    boardW, boardH,
-    board: makeBoard(boardW, boardH),
+    boardW, 
+    boardH: totalH,
+    board: makeBoard(boardW, totalH),
     level: 0,
     lines: 0,
     score: 0,
@@ -56,6 +59,12 @@ export function spawnNext(state: GameState) {
   const width = pieceWidth(piece);
   piece.x = Math.floor((state.boardW - width) / 2);
   piece.y = -spawnOffsetTop(piece); // allow some negative y spawn
+
+  if (collides(state, piece)) {
+    state.active = null;
+    state.gameOver = true;        // ← NEW
+    return;
+  }
   state.active = piece;
   state.lockTimerMs = 0;
   state.canHold = true;
@@ -100,8 +109,21 @@ function grounded(state: GameState): boolean {
 
 function lockAndClear(state: GameState, params: GameParams) {
   if (!state.active) return;
+  const cells = shapeCells(state.active.type, state.active.rot);
   lockToBoard(state, state.active);
+
+  // If any locked cell is above the top (gy < 0), top-out immediately
+  for (const [cx, cy] of cells) {
+    const gy = state.active.y + cy;
+    if (gy < 0) {
+      state.active = null;
+      state.gameOver = true;      
+      return;                     
+    }
+  }
+
   state.active = null;
+
   const rows = fullRows(state);
   if (rows.length) {
     clearRows(state, rows);
@@ -109,29 +131,41 @@ function lockAndClear(state: GameState, params: GameParams) {
     state.score += params.lineClearScore(rows.length, state.level);
     state.level = params.levelUp(state.lines);
   }
-  spawnNext(state);
+
+  spawnNext(state);           
 }
 
 export function step(state: GameState, inputs: Inputs, dtMs: number, params: GameParams = DEFAULT_PARAMS) {
   state.tick++;
 
-  // consume one-shot inputs that don’t depend on timing windows
+  // consume one-shot inputs
   if (inputs.rotCW)  tryRotate(state, +1);
   if (inputs.rotCCW) tryRotate(state, -1);
 
   // DAS/ARR (left/right)
   handleDasArr(state, inputs, dtMs, params);
 
-  // soft/hard drop (hard drop locks immediately)
+  // HARD DROP: descend to the floor immediately, +2 points per cell
   if (inputs.hardDrop && state.active) {
-    while (!grounded(state)) tryMove(state, 0, +1);
+    let hardDropCells = 0;
+    while (!grounded(state)) {
+      if (!tryMove(state, 0, +1)) break;
+      hardDropCells++;
+    }
+    if (hardDropCells > 0) {
+      state.score += hardDropCells * 2; // ← scoring
+    }
     lockAndClear(state, params);
     return;
   }
 
-  // Gravity
+  // GRAVITY (+ optional SOFT DROP acceleration)
   const g = params.gravityCellsPerSec(state.level) + (inputs.softDrop ? params.softDropBonus : 0);
   state.fallAccum += (g * dtMs) / 1000;
+
+  // Count vertical moves this tick to award soft-drop points
+  let softDropCells = 0;
+
   while (state.fallAccum >= 1 && state.active) {
     if (!tryMove(state, 0, +1)) {
       // on ground: start/advance lock delay
@@ -141,12 +175,18 @@ export function step(state: GameState, inputs: Inputs, dtMs: number, params: Gam
         state.fallAccum = 0;
         return;
       }
-      break; // stay here; no more vertical moves this tick
+      break;
     } else {
-      // any successful move while grounded resets lock timer
-      state.lockTimerMs = 0;
+      // moved down successfully
+      if (inputs.softDrop) softDropCells++; // ← count only when ↓ held
+      state.lockTimerMs = 0; // any movement resets lock delay
     }
     state.fallAccum -= 1;
+  }
+
+  // Award soft-drop points (+1 per cell) after vertical resolution
+  if (softDropCells > 0) {
+    state.score += softDropCells;
   }
 
   // Respawn (your "R") — just spawn a new piece, ignoring current

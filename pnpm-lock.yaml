@@ -24,6 +24,9 @@ importers:
 
   apps/client:
     dependencies:
+      colyseus.js:
+        specifier: ^0.16.21
+        version: 0.16.21
       react:
         specifier: ^19.1.1
         version: 19.2.0
@@ -216,6 +219,10 @@ packages:
 
   '@colyseus/greeting-banner@2.0.6':
     resolution: {integrity: sha512-65nK7KnJn6g3ArtJqNfVX+Mx7xTlBka04kSwloLP7s24UpCEaK7bMGRLgkzfnysARzlVh1eV4jynBWZN82dYwQ==}
+
+  '@colyseus/httpie@2.0.1':
+    resolution: {integrity: sha512-JvABMZzPLiyrUsVj3ElXGORRDTu+NKzXHWd1uV1R1SThAKMm06cVW6bOyADARD65bs8JJoHNNbUkW8KoRvRDzA==}
+    engines: {node: '>=10'}
 
   '@colyseus/msgpackr@1.11.2':
     resolution: {integrity: sha512-MuwPFhizFKC3zmGfy0fpo+kcnZdNdnQHFVjw81v4WXHCelDeCX8yNRVtuEm8kGlHqq7qiASLC0pu0RPqYOhxXg==}
@@ -874,6 +881,10 @@ packages:
 
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==}
+
+  colyseus.js@0.16.21:
+    resolution: {integrity: sha512-Kbopl37ZiCQr+57PJRc8ibFi/aXekYOJvJpqjAy/X1s9JocZlvixkGe80mHqXGZ3UmdG5mXqMMXWwn8U32PE6g==}
+    engines: {node: '>= 12.x'}
 
   colyseus@0.16.5:
     resolution: {integrity: sha512-Ki3516JZnyJ997/FRgECMUqPLig5LSYOEw54whKfA+fBUVfsTPSzZb/sppOd+MR3LnM59P+c+v2TBEreRgAkYA==}
@@ -1742,6 +1753,9 @@ packages:
   tslib@1.9.3:
     resolution: {integrity: sha512-4krF8scpejhaOgqzBEcGM7yDIEfi0/8+8zDRZhNZZ2kjmHJ4hv3zCbQWxoJGz1iw5U0Jl0nma13xzHXcncMavQ==}
 
+  tslib@2.8.1:
+    resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
+
   tsx@4.20.6:
     resolution: {integrity: sha512-ytQKuwgmrrkDTFP4LjR0ToE2nqgy886GpvRSpU0JAnrdBYppuY5rLkRUYPU1yCryb24SsKBTL/hlDQAEFVwtZg==}
     engines: {node: '>=18.0.0'}
@@ -2028,6 +2042,8 @@ snapshots:
       - supports-color
 
   '@colyseus/greeting-banner@2.0.6': {}
+
+  '@colyseus/httpie@2.0.1': {}
 
   '@colyseus/msgpackr@1.11.2':
     optionalDependencies:
@@ -2663,6 +2679,17 @@ snapshots:
       color-name: 1.1.4
 
   color-name@1.1.4: {}
+
+  colyseus.js@0.16.21:
+    dependencies:
+      '@colyseus/httpie': 2.0.1
+      '@colyseus/msgpackr': 1.11.2
+      '@colyseus/schema': 3.0.64
+      tslib: 2.8.1
+      ws: 8.18.3
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   colyseus@0.16.5(@colyseus/auth@0.16.6(@colyseus/core@0.16.22(@colyseus/schema@3.0.64)(@pm2/io@6.1.0))(express@4.21.2))(@colyseus/core@0.16.22(@colyseus/schema@3.0.64)(@pm2/io@6.1.0))(@colyseus/redis-driver@0.16.1(@colyseus/schema@3.0.64)(@pm2/io@6.1.0))(@colyseus/redis-presence@0.16.4(@colyseus/schema@3.0.64)(@pm2/io@6.1.0))(@colyseus/schema@3.0.64)(@colyseus/uwebsockets-transport@0.16.10(@colyseus/core@0.16.22(@colyseus/schema@3.0.64)(@pm2/io@6.1.0)))(@colyseus/ws-transport@0.16.5(@colyseus/core@0.16.22(@colyseus/schema@3.0.64)(@pm2/io@6.1.0))):
     dependencies:
@@ -3580,6 +3607,8 @@ snapshots:
       typescript: 5.9.3
 
   tslib@1.9.3: {}
+
+  tslib@2.8.1: {}
 
   tsx@4.20.6:
     dependencies:

@@ -10,6 +10,8 @@ export interface Piece {
   rot: number; // 0..3
 }
 
+export const HIDDEN_ROWS = 1;
+
 export interface Inputs {
   left?: boolean;
   right?: boolean;
@@ -22,6 +24,7 @@ export interface Inputs {
 }
 
 export interface GameState {
+  gameOver: boolean;
   tick: number;
   boardW: number;
   boardH: number;

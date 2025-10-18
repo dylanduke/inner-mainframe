@@ -16,12 +16,21 @@ export function shapeCells(type: Piece["type"], rot: number) {
 export function collides(state: GameState, p: Piece): boolean {
   const cells = shapeCells(p.type, p.rot);
   for (const [cx, cy] of cells) {
-    const gx = p.x + cx, gy = p.y + cy;
-    if (gx < 0 || gx >= state.boardW || gy < 0 || gy >= state.boardH) return true;
+    const gx = p.x + cx;
+    const gy = p.y + cy;
+
+    // walls + floor
+    if (gx < 0 || gx >= state.boardW) return true;
+    if (gy >= state.boardH) return true; // block floor
+
+    // allow negative gy (hidden rows / spawn space)
+
+    // occupied (only if inside the board)
     if (gy >= 0 && state.board[gy][gx]) return true;
   }
   return false;
 }
+
 
 export function lockToBoard(state: GameState, p: Piece) {
   const cells = shapeCells(p.type, p.rot);
