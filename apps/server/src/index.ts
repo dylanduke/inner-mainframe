@@ -10,7 +10,7 @@ class PingRoom extends Room {
   onCreate() {
     this.onMessage(Op.JOIN, (client, msg: JoinPayload) => {
       console.log("join", msg.name);
-      this.send(client, { op: Op.STATE_ACK, tick: 0 });
+      this.send(client, Op.STATE_ACK, { tick: 0 });
     });
     this.onMessage(Op.INPUT, (_client, _msg: ClientInput) => {
       // no-op; just proving wiring works
