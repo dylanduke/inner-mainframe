@@ -182,12 +182,12 @@ export default function CanvasGame(): JSX.Element {
 
       // reference shapes
       for (const e of entitiesRef.current) {
-        drawShape(ctx, e.type, e.x | 0, e.y | 0, e.rot, e.color);
+        drawShape(ctx, e.type, e.x | 0, e.y | 0, e.rot);
       }
 
       // player
       const p = playerRef.current;
-      drawShape(ctx, p.type, p.x | 0, p.y | 0, p.rot, p.color);
+      drawShape(ctx, p.type, p.x | 0, p.y | 0, p.rot);
 
       // HUD
       ctx.fillStyle = "rgba(255,255,255,0.9)";
