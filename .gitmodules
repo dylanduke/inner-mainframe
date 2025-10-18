@@ -1,0 +1,3 @@
+[submodule "vendor/hackvegas-2025"]
+	path = vendor/hackvegas-2025
+	url = https://github.com/sebastiansandqvist/hackvegas-2025.git
