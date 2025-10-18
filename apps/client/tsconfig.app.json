@@ -21,7 +21,16 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": true,
+
+    /* >>> added for monorepo shared packages <<< */
+    "baseUrl": ".",
+    "paths": {
+      "@inner-mainframe/game-logic": ["../../packages/game-logic/src"],
+      "@inner-mainframe/game-logic/*": ["../../packages/game-logic/src/*"],
+      "@inner-mainframe/net-protocol": ["../../packages/net-protocol/src"],
+      "@inner-mainframe/net-protocol/*": ["../../packages/net-protocol/src/*"]
+    }
   },
   "include": ["src"]
 }

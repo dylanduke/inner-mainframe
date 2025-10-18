@@ -1,0 +1,17 @@
+{
+    "name": "inner-mainframe",
+    "private": true,
+    "packageManager": "pnpm@9.0.0",
+    "scripts": {
+        "dev:client": "pnpm --filter @inner-mainframe/client dev",
+        "dev:server": "pnpm --filter @inner-mainframe/server dev",
+        "dev": "pnpm -w run dev:server & pnpm -w run dev:client",
+        "build": "pnpm -r build"
+    },
+    "dependencies": {
+        "zod": "^4.1.12"
+    },
+    "devDependencies": {
+        "@types/node": "^22"
+    }
+}

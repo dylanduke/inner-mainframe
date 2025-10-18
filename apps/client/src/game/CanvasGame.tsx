@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, type JSX } from "react";
-import { TILE, SHAPES, rotateCells, normalize, shapeBounds } from "./shapes"; // ← adjust path if needed
-import type { ShapeKey } from "./shapes";
+import { TILE, SHAPES, rotateCells, normalize, shapeBounds, type ShapeKey } from "@inner-mainframe/game-logic"; 
 import { green } from "@mui/material/colors";
 
 const LOGICAL_W = 500; // width in CSS pixels
