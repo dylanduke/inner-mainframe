@@ -7,6 +7,7 @@ import { createOffscreenCanvas, drawWithShaders, setupWebglCanvas } from "@hackv
 import { makeGameRenderer } from "./makeGameRenderer";
 // pick your tint (maps to shader theme)
 import { Color } from "@hackvegas-2025/shared"; // same enum you used
+import appleFontUrl from "./apple-ii.ttf?url";
 
 const BOARD_W = 10;
 const BOARD_H = 20;
@@ -35,21 +36,40 @@ export default function CanvasGame(): JSX.Element {
   const offctxRef = useRef<OffscreenCanvasRenderingContext2D | null>(null);
 
   useEffect(() => {
-    // --- setup WebGL pipeline once ---
+    try {
+      const ff = new FontFace("Apple II", `url(${appleFontUrl})`, {
+        style: "normal",
+        weight: "400",
+        display: "swap",
+      });
+      ff.load().then((f) => (document as any).fonts.add(f));
+    } catch (e) {
+      console.warn("Font load failed", e);
+    }
     const { offscreenCanvas, offscreenCtx } = createOffscreenCanvas();
     offscreenRef.current = offscreenCanvas;
     offctxRef.current = offscreenCtx;
-
+  
     const { canvas, gl, shaderData } = setupWebglCanvas(offscreenCanvas, offscreenCtx);
     webglCanvasRef.current = canvas;
     glRef.current = gl;
     shaderDataRef.current = shaderData;
-
-    // place the WebGL canvas in the DOM
-    if (mountRef.current) mountRef.current.appendChild(canvas);
+  
+    // make the WebGL canvas cover the entire page
+    Object.assign(canvas.style, {
+      position: "fixed",
+      inset: "0",
+      width: "100vw",
+      height: "100vh",
+      zIndex: "0",
+      display: "block",
+    });
+  
+    // append to the body instead of the mount div
+    document.body.appendChild(canvas);
 
     // renderer that the shader pipeline will call to draw the *game* into the offscreen
-    const renderGameToOffscreen = makeGameRenderer(gameRef, BOARD_W, BOARD_H);
+    const renderGameToOffscreen = makeGameRenderer(gameRef, BOARD_W, BOARD_H, runningRef);
 
     // shader RAF: only post-process + present
     function drawShaders() {
@@ -122,14 +142,17 @@ export default function CanvasGame(): JSX.Element {
     function onKey(e: KeyboardEvent, down: boolean) {
       if ((e.key === "p" || e.key === "P") && down) {
         runningRef.current = !runningRef.current;
+      
         if (runningRef.current) {
+          // resume ONLY the game update loop
           tPrevRef.current = performance.now();
           accRef.current = 0;
           rafGameRef.current = requestAnimationFrame(loop);
-          rafShaderRef.current = requestAnimationFrame(drawShaders);
+          // ⬅️ do NOT touch the shader RAF here
         } else {
+          // pause ONLY the game update loop
           cancelAnimationFrame(rafGameRef.current);
-          cancelAnimationFrame(rafShaderRef.current);
+          // ⬅️ leave rafShaderRef running so CRT/scan waves keep animating
         }
         return;
       }
@@ -161,19 +184,13 @@ export default function CanvasGame(): JSX.Element {
     window.addEventListener("keydown", kd);
     window.addEventListener("keyup", ku);
 
-    // resize just needs to trigger WebGL canvas CSS size; shader driver already reads DPR/rect each frame
+  
     function onResize() {
-      // style width/height for the WebGL canvas; internal buffer is resized in drawWithShaders
       const c = webglCanvasRef.current!;
-      const MARGIN = 24;
-      const vw = window.innerWidth, vh = window.innerHeight;
-      const aspect = BOARD_H / BOARD_W; // 2:1
-      const maxByW = Math.max(0, vw - MARGIN * 2);
-      const maxByH = Math.max(0, (vh - MARGIN * 2) / aspect);
-      const cssW = Math.floor(Math.min(maxByW, maxByH) * 0.85);
-      const cssH = Math.floor(cssW * aspect);
-      c.style.width = `${cssW}px`;
-      c.style.height = `${cssH}px`;
+      if (!c) return;
+      // canvas already fills the screen via CSS set in useEffect
+      c.style.width = "100vw";
+      c.style.height = "100vh";
     }
     window.addEventListener("resize", onResize);
     onResize();
