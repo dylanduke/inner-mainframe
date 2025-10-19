@@ -8,6 +8,11 @@ import { makeGameRenderer } from "./makeGameRenderer";
 import { Color } from "@hackvegas-2025/shared";
 import appleFontUrl from "./apple-ii.ttf?url";
 
+// 🔊 sound (SFX)
+import { useSound } from "./sfx/SoundProvider";
+// 🔊 BGM
+import bgmUrl from "./sfx/bgm.wav?url";
+
 // Spud
 import { gamepads, Button, HapticIntensity } from "@spud.gg/api";
 
@@ -38,11 +43,32 @@ export default function CanvasGame(): JSX.Element {
     pause: false,
   });
 
+  // 🔊 SFX helpers & trackers
+  const { play } = useSound();
+  const prevLinesRef = useRef(0);
+  const prevFilledRef = useRef(0);
+  const endPlayedRef = useRef<boolean>(false);
+
+  // 🔊 BGM
+  const bgmRef = useRef<HTMLAudioElement | null>(null);
+
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const glRef = useRef<WebGLRenderingContext | WebGL2RenderingContext | null>(null);
   const shaderDataRef = useRef<any>(null);
   const offscreenRef = useRef<OffscreenCanvas | null>(null);
   const offctxRef = useRef<OffscreenCanvasRenderingContext2D | null>(null);
+
+  // Count filled cells in the entire board (hidden rows included is fine)
+  function countFilled(board: number[][]): number {
+    let n = 0;
+    for (let y = 0; y < board.length; y++) {
+      const row = board[y];
+      for (let x = 0; x < row.length; x++) {
+        if (row[x]) n++;
+      }
+    }
+    return n;
+  }
 
   useEffect(() => {
     // Font
@@ -56,6 +82,19 @@ export default function CanvasGame(): JSX.Element {
     } catch (e) {
       console.warn("Font load failed", e);
     }
+
+    // 🔊 BGM: create & prime (will be controlled in loop)
+    {
+      const a = new Audio(bgmUrl);
+      a.loop = true;
+      a.volume = 0.5; // tweak to taste
+      // Do not auto-play here; browsers may block. We'll play/pause in the main loop based on state.
+      bgmRef.current = a;
+    }
+
+    // Baselines for SFX heuristics
+    prevFilledRef.current = countFilled(gameRef.current.board);
+    prevLinesRef.current = gameRef.current.lines ?? 0;
 
     // Offscreen + WebGL
     const { offscreenCanvas, offscreenCtx } = createOffscreenCanvas();
@@ -94,11 +133,17 @@ export default function CanvasGame(): JSX.Element {
       // reset time origin so we don't jump when unpausing
       tPrevRef.current = performance.now();
       accRef.current = 0;
+      // 🔊 BGM: handled in loop immediately next frame
     }
 
     function restartGame() {
       gameRef.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
       lastHudRef.current = { lines: -1 };
+      // 🔊 SFX trackers
+      prevLinesRef.current = gameRef.current.lines ?? 0;
+      prevFilledRef.current = countFilled(gameRef.current.board);
+      endPlayedRef.current = false;
+      // 🔊 BGM: keep playing (no reset) if running; loop logic below will handle pause/over
       if (hudRef.current) {
         hudRef.current.textContent = `Score: 0 • Level: ${gameRef.current.level}`;
       }
@@ -169,6 +214,10 @@ export default function CanvasGame(): JSX.Element {
     window.addEventListener("keydown", kd);
     window.addEventListener("keyup", ku);
 
+    // Utility
+    const isGameOver = (s: any): boolean =>
+      Boolean(s?.gameOver || s?.over || s?.state === "gameover");
+
     // Fixed-step loop (always runs so unpause is detectable)
     const FIXED_DT = 1 / 60;
     let frames = 0, last = performance.now();
@@ -187,10 +236,36 @@ export default function CanvasGame(): JSX.Element {
         inputsRef.current.hardDrop = false;
       }
 
+      // advance sim
       step(gameRef.current, inputsRef.current, FIXED_DT * 1000, DEFAULT_PARAMS);
 
+      // ----- 🔊 SOUND EVENTS -----
+      const s: any = gameRef.current;
+
+      // (1) Line clear → "clear"
+      if (typeof s.lines === "number" && s.lines > prevLinesRef.current) {
+        play("clear");
+      }
+      prevLinesRef.current = typeof s.lines === "number" ? s.lines : prevLinesRef.current;
+
+      // (2) Piece placed (lock & possibly clear) → board changed → "drop"
+      const filledNow = countFilled(s.board);
+      if (filledNow !== prevFilledRef.current && !isGameOver(s)) {
+        play("drop");
+      }
+      prevFilledRef.current = filledNow;
+
+      // (3) Game over → "end" (once)
+      if (isGameOver(s) && !endPlayedRef.current) {
+        endPlayedRef.current = true;
+        play("end");
+      }
+      if (!isGameOver(s)) {
+        endPlayedRef.current = false;
+      }
+      // ----- 🔊 end sound events -----
+
       // HUD updates when lines change
-      const s = gameRef.current;
       if (s.lines !== lastHudRef.current.lines) {
         if (hudRef.current) {
           hudRef.current.textContent = `Score: ${s.score.toLocaleString()} • Level: ${s.level}`;
@@ -203,6 +278,20 @@ export default function CanvasGame(): JSX.Element {
       inputsRef.current.rotCCW = false;
       inputsRef.current.hardDrop = false;
       inputsRef.current.respawn = false;
+
+      // 🔊 BGM control (once per fixed step is fine)
+      const bgm = bgmRef.current;
+      if (bgm) {
+        const shouldPlay = runningRef.current && !isGameOver(s);
+        if (shouldPlay) {
+          if (bgm.paused) {
+            // try to play; if browser blocked, it will succeed on next user gesture
+            bgm.play().catch(() => {});
+          }
+        } else {
+          if (!bgm.paused) bgm.pause();
+        }
+      }
     }
 
     function loop() {
@@ -235,6 +324,10 @@ export default function CanvasGame(): JSX.Element {
       } else {
         // paused: don’t accumulate; keep inputs clean per frame
         accRef.current = 0;
+
+        // 🔊 Ensure BGM is paused even if we didn't step this frame
+        const bgm = bgmRef.current;
+        if (bgm && !bgm.paused) bgm.pause();
       }
 
       // 4) Stats & Spud housekeeping
@@ -274,9 +367,17 @@ export default function CanvasGame(): JSX.Element {
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", kd);
       window.removeEventListener("keyup", ku);
+
+      // 🔊 BGM cleanup
+      if (bgmRef.current) {
+        try { bgmRef.current.pause(); } catch {}
+        bgmRef.current.src = "";
+        bgmRef.current = null;
+      }
+
       try { webglCanvasRef.current?.remove(); } catch {}
     };
-  }, []);
+  }, [play]);
 
   return (
     <div style={{

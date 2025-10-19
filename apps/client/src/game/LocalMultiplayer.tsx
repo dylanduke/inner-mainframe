@@ -7,6 +7,10 @@ import {
 import { createOffscreenCanvas, drawWithShaders, setupWebglCanvas, Color } from "@hackvegas-2025/shared";
 import appleFontUrl from "./apple-ii.ttf?url";
 
+// 🔊 sound
+import { useSound } from "./sfx/SoundProvider";
+import bgmUrl from "./sfx/bgm.wav?url";
+
 // Spud gamepad support
 import { gamepads, Button, HapticIntensity } from "@spud.gg/api";
 
@@ -28,6 +32,18 @@ export default function LocalMultiplayer(): JSX.Element {
   const p2Ref = useRef<GameState>(createGame(BOARD_W, BOARD_H, 0x0b0b00));
   const p1InRef = useRef<Inputs>({});
   const p2InRef = useRef<Inputs>({});
+
+  // 🔊 SFX
+  const { play } = useSound();
+  const p1PrevLinesRef = useRef(0);
+  const p2PrevLinesRef = useRef(0);
+  const p1PrevFilledRef = useRef(0);
+  const p2PrevFilledRef = useRef(0);
+  const p1EndPlayedRef = useRef(false);
+  const p2EndPlayedRef = useRef(false);
+
+  // 🔊 BGM
+  const bgmRef = useRef<HTMLAudioElement | null>(null);
 
   // keyboard-held state lives SEPARATELY from the per-frame input objects
   const kbHeldRef = useRef({
@@ -61,12 +77,38 @@ export default function LocalMultiplayer(): JSX.Element {
   const offscreenRef = useRef<OffscreenCanvas | null>(null);
   const offctxRef = useRef<OffscreenCanvasRenderingContext2D | null>(null);
 
+  // helpers
+  const countFilled = (board: number[][]) => {
+    let n = 0;
+    for (let y = 0; y < board.length; y++) {
+      const row = board[y];
+      for (let x = 0; x < row.length; x++) if (row[x]) n++;
+    }
+    return n;
+  };
+  const isOver = (s: GameState) => !!(s.gameOver as any);
+
   useEffect(() => {
     // Font
     try {
       const ff = new FontFace("Apple II", `url(${appleFontUrl})`, { style: "normal", weight: "400", display: "swap" });
       ff.load().then((f) => (document as any).fonts.add(f));
     } catch {}
+
+    // 🔊 init SFX trackers
+    p1PrevLinesRef.current = p1Ref.current.lines ?? 0;
+    p2PrevLinesRef.current = p2Ref.current.lines ?? 0;
+    p1PrevFilledRef.current = countFilled(p1Ref.current.board);
+    p2PrevFilledRef.current = countFilled(p2Ref.current.board);
+    p1EndPlayedRef.current = p2EndPlayedRef.current = false;
+
+    // 🔊 BGM create element (play/pause controlled in loop)
+    {
+      const a = new Audio(bgmUrl);
+      a.loop = true;
+      a.volume = 0.5;
+      bgmRef.current = a;
+    }
 
     // Offscreen + WebGL
     const { offscreenCanvas, offscreenCtx } = createOffscreenCanvas();
@@ -107,6 +149,7 @@ export default function LocalMultiplayer(): JSX.Element {
       // keep loop alive; just reset time origin so we don't jump after unpausing
       tPrevRef.current = performance.now();
       accRef.current = 0;
+      // BGM handled in loop next frame
     }
 
     function restartMatch() {
@@ -117,6 +160,13 @@ export default function LocalMultiplayer(): JSX.Element {
       tPrevRef.current = performance.now();
       accRef.current = 0;
 
+      // 🔊 reset trackers
+      p1PrevLinesRef.current = p1Ref.current.lines ?? 0;
+      p2PrevLinesRef.current = p2Ref.current.lines ?? 0;
+      p1PrevFilledRef.current = countFilled(p1Ref.current.board);
+      p2PrevFilledRef.current = countFilled(p2Ref.current.board);
+      p1EndPlayedRef.current = p2EndPlayedRef.current = false;
+
       try { padByIndex(seatRef.current.p1).rumble(60, HapticIntensity.Balanced); } catch {}
       try { padByIndex(seatRef.current.p2).rumble(60, HapticIntensity.Balanced); } catch {}
     }
@@ -124,7 +174,7 @@ export default function LocalMultiplayer(): JSX.Element {
     function stopMatchIfOver() {
       if (!matchOverRef.current && (p1Ref.current.gameOver || p2Ref.current.gameOver)) {
         matchOverRef.current = true;
-        runningRef.current = false;   // pause sim, loop keeps polling so restart works
+        runningRef.current = false;   // pause sim; loop keeps polling so restart works
       }
     }
 
@@ -176,7 +226,7 @@ export default function LocalMultiplayer(): JSX.Element {
       const gp1 = gpToHeldAndEdges(p1Pad);
       const gp2 = gpToHeldAndEdges(p2Pad);
 
-      // Overwrite helds from (gamepadHeld OR keyboardHeld) — no feedback loop with previous frame
+      // Overwrite helds from (gamepadHeld OR keyboardHeld)
       p1InRef.current.left     = !!(gp1.held.left     || kbHeldRef.current.p1.left);
       p1InRef.current.right    = !!(gp1.held.right    || kbHeldRef.current.p1.right);
       p1InRef.current.softDrop = !!(gp1.held.softDrop || kbHeldRef.current.p1.softDrop);
@@ -286,9 +336,48 @@ export default function LocalMultiplayer(): JSX.Element {
         edgesRef.current.p1.rotCW = edgesRef.current.p1.rotCCW = edgesRef.current.p1.hardDrop = false;
         edgesRef.current.p2.rotCW = edgesRef.current.p2.rotCCW = edgesRef.current.p2.hardDrop = false;
 
-        stopMatchIfOver();
+        // ---- 🔊 SOUND EVENTS (per player) ----
+        const p1 = p1Ref.current;
+        const p2 = p2Ref.current;
+
+        // Line clear → "clear"
+        if (p1.lines > p1PrevLinesRef.current) play("clear");
+        if (p2.lines > p2PrevLinesRef.current) play("clear");
+        p1PrevLinesRef.current = p1.lines;
+        p2PrevLinesRef.current = p2.lines;
+
+        // Piece placed (board changed) → "drop"
+        const p1Filled = countFilled(p1.board);
+        const p2Filled = countFilled(p2.board);
+        if (!isOver(p1) && p1Filled !== p1PrevFilledRef.current) play("drop");
+        if (!isOver(p2) && p2Filled !== p2PrevFilledRef.current) play("drop");
+        p1PrevFilledRef.current = p1Filled;
+        p2PrevFilledRef.current = p2Filled;
+
+        // Game over → "end" (once per player)
+        if (isOver(p1) && !p1EndPlayedRef.current) { p1EndPlayedRef.current = true; play("end"); }
+        if (isOver(p2) && !p2EndPlayedRef.current) { p2EndPlayedRef.current = true; play("end"); }
+        if (!isOver(p1)) p1EndPlayedRef.current = false;
+        if (!isOver(p2)) p2EndPlayedRef.current = false;
+
+        // Determine match over
+        if (!matchOverRef.current && (p1.gameOver || p2.gameOver)) {
+          matchOverRef.current = true;
+          runningRef.current = false;
+        }
       } else {
         accRef.current = 0;
+      }
+
+      // 🔊 BGM control (kept outside so it also reacts on pause/over frames)
+      const bgm = bgmRef.current;
+      if (bgm) {
+        const shouldPlay = runningRef.current && !matchOverRef.current;
+        if (shouldPlay) {
+          if (bgm.paused) bgm.play().catch(() => {});
+        } else if (!bgm.paused) {
+          bgm.pause();
+        }
       }
 
       rafGameRef.current = requestAnimationFrame(loop);
@@ -315,9 +404,17 @@ export default function LocalMultiplayer(): JSX.Element {
       window.removeEventListener("keydown", kd as any);
       window.removeEventListener("keyup", ku as any);
       window.removeEventListener("blur", onBlur);
+
+      // 🔊 BGM cleanup
+      if (bgmRef.current) {
+        try { bgmRef.current.pause(); } catch {}
+        bgmRef.current.src = "";
+        bgmRef.current = null;
+      }
+
       try { webglCanvasRef.current?.remove(); } catch {}
     };
-  }, []);
+  }, [play]);
 
   return <></>;
 }

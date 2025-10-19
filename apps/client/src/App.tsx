@@ -4,6 +4,8 @@ import CanvasGame from "./game/CanvasGame";
 import LocalMultiplayer from "./game/LocalMultiplayer";
 
 import appleFontUrl from "./game/apple-ii.ttf?url";
+import startUrl from "./game/sfx/start.wav?url"; // ✅ bundle-safe URL to your sound
+
 import {
   createOffscreenCanvas,
   drawWithShaders,
@@ -11,13 +13,14 @@ import {
   Color,
 } from "@hackvegas-2025/shared";
 
+// 🔊 sound (for click/select etc.)
+import { SoundProvider, useSound } from "./game/sfx/SoundProvider";
+
 type Route = "menu" | "single" | "local";
 
 // Simple menu model
 type MenuItem = { key: Route; label: string };
 const MENU_ITEMS: MenuItem[] = [
-  // { key: "single", label: "▶  Single Player" },
-  // { key: "local",  label: "⧉  Local Multiplayer" },
   { key: "single", label: "Enter" },
   { key: "local",  label: "???" },
 ];
@@ -25,10 +28,65 @@ const MENU_ITEMS: MenuItem[] = [
 // What we keep from the renderer to enable hit-testing
 type OptionRect = { x: number; y: number; w: number; h: number };
 
-export default function App() {
+function AppInner() {
   const [route, setRoute] = useState<Route>("menu");
+  const { play } = useSound();
 
-  // Load Apple II font so shader text matches game
+  // ---- First user gesture gate (to satisfy browser autoplay policy)
+  const [gestureSatisfied, setGestureSatisfied] = useState(false);
+  const ensureGesture = React.useCallback(() => {
+    if (!gestureSatisfied) setGestureSatisfied(true);
+  }, [gestureSatisfied]);
+
+  useEffect(() => {
+    const onFirstGesture = () => {
+      ensureGesture();
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("keydown", onFirstGesture);
+    };
+    window.addEventListener("pointerdown", onFirstGesture, { once: true });
+    window.addEventListener("keydown", onFirstGesture, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("keydown", onFirstGesture);
+    };
+  }, [ensureGesture]);
+
+  // ---- Looping menu BGM managed locally (independent of SoundProvider API)
+  const menuLoopRef = useRef<HTMLAudioElement | null>(null);
+
+  // Create the audio element once
+  useEffect(() => {
+    const audio = new Audio(startUrl);
+    audio.loop = true;
+    audio.volume = 0.7; // tweak if you want
+    menuLoopRef.current = audio;
+    return () => {
+      audio.pause();
+      audio.src = "";
+      menuLoopRef.current = null;
+    };
+  }, []);
+
+  // Start/stop looping audio based on route & gesture
+  useEffect(() => {
+    const audio = menuLoopRef.current;
+    if (!audio) return;
+
+    if (route === "menu" && gestureSatisfied) {
+      // Restart from 0 each time you land on the menu (feels snappy)
+      try {
+        audio.currentTime = 0;
+      } catch {}
+      audio.play().catch(() => {
+        // Autoplay blocked — will start once user interacts again
+      });
+    } else {
+      audio.pause();
+    }
+  }, [route, gestureSatisfied]);
+
+  // ---- Font load to match game shaders
   useEffect(() => {
     try {
       const ff = new FontFace("Apple II", `url(${appleFontUrl})`, {
@@ -42,19 +100,19 @@ export default function App() {
     }
   }, []);
 
+  // ---- Escape returns to menu (play select)
   useEffect(() => {
-    if (route === "menu") return; // only listen while in a game screen
-  
+    if (route === "menu") return;
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        play("select");
         setRoute("menu");
       }
     };
-  
     window.addEventListener("keydown", onEsc);
     return () => window.removeEventListener("keydown", onEsc);
-  }, [route]);
+  }, [route, play]);
 
   // Title text is stable
   const titleText = useMemo(() => "Inner Mainframe", []);
@@ -74,14 +132,19 @@ export default function App() {
     optionRects: [],
   });
 
-  // Helpers to change route from menu
-  const choose = (route: Route) => {
-    if (route === "menu") return;
-    setRoute(route);
+  // Helpers to change route from menu (plays "select")
+  const choose = (next: Route) => {
+    if (next === "menu") return;
+    play("select");
+    setRoute(next);
   };
 
   // Build a renderer that draws the entire MENU plate (title + selectable options)
-  function makeMenuRenderer(items: MenuItem[], getHoverIndex: () => number, setRects: (r: OptionRect[]) => void) {
+  function makeMenuRenderer(
+    items: MenuItem[],
+    getHoverIndex: () => number,
+    setRects: (r: OptionRect[]) => void
+  ) {
     const APPLE_FONT = "Apple II, ui-sans-serif, system-ui";
 
     return function renderMenuToOffscreen(
@@ -136,7 +199,12 @@ export default function App() {
       ctx.globalAlpha = 0.35;
       const titleW = ctx.measureText(titleText).width;
       const tx = Math.round(offscreen.width / 2);
-      ctx.fillRect(tx - Math.ceil(titleW / 2), titleY + Math.ceil(DPR * 1.25), Math.ceil(titleW), Math.ceil(DPR));
+      ctx.fillRect(
+        tx - Math.ceil(titleW / 2),
+        titleY + Math.ceil(DPR * 1.25),
+        Math.ceil(titleW),
+        Math.ceil(DPR)
+      );
       ctx.globalAlpha = 1;
 
       // Menu options
@@ -160,7 +228,10 @@ export default function App() {
         const padX = Math.max(16, Math.round(baseSize * 0.9)) * DPR;
         const padY = Math.max(10, Math.round(baseSize * 0.6)) * DPR;
 
-        const boxW = Math.min(Math.floor(innerW * 0.55), Math.max(Math.round(textW + padX * 2), Math.round(220 * DPR)));
+        const boxW = Math.min(
+          Math.floor(innerW * 0.55),
+          Math.max(Math.round(textW + padX * 2), Math.round(220 * DPR))
+        );
         const boxH = Math.round((baseSize * DPR) + padY * 2);
 
         const cx = Math.round(offscreen.width / 2);
@@ -232,8 +303,6 @@ export default function App() {
       return;
     }
 
-    
-
     const { offscreenCanvas, offscreenCtx } = createOffscreenCanvas();
     const { canvas, gl, shaderData } = setupWebglCanvas(offscreenCanvas, offscreenCtx);
 
@@ -292,6 +361,7 @@ export default function App() {
     };
 
     const onClick = (e: MouseEvent) => {
+      ensureGesture(); // satisfy gesture if this is the first interaction
       const idx = hitTest(e.clientX, e.clientY);
       if (idx !== -1) {
         choose(MENU_ITEMS[idx].key);
@@ -308,6 +378,7 @@ export default function App() {
         shaderRefs.current.hoverIndex = (shaderRefs.current.hoverIndex + 1) % count;
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
+        ensureGesture(); // gesture satisfied if this is their first keypress
         const idx = shaderRefs.current.hoverIndex ?? 0;
         choose(MENU_ITEMS[idx].key);
       }
@@ -336,13 +407,21 @@ export default function App() {
       shaderRefs.current.render = () => {};
       shaderRefs.current.optionRects = [];
     };
-  }, [route, titleText]);
+  }, [route, titleText, ensureGesture, play]);
 
-  // Render: no DOM header, no DOM menu — only the game pages when selected.
+  // Render: only the game pages when selected.
   return (
     <>
       {route === "single" && <CanvasGame />}
       {route === "local" && <LocalMultiplayer />}
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <SoundProvider>
+      <AppInner />
+    </SoundProvider>
   );
 }
