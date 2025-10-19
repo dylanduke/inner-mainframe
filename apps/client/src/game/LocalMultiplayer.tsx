@@ -5,8 +5,6 @@ import {
   type GameState, type Inputs, HIDDEN_ROWS, shapeCells
 } from "@inner-mainframe/game-logic";
 import { createOffscreenCanvas, drawWithShaders, setupWebglCanvas, Color } from "@hackvegas-2025/shared";
-import * as spud from "@spud.gg/api"; // optional: used if connected
-
 import appleFontUrl from "./apple-ii.ttf?url";
 
 const BOARD_W = 10;
@@ -14,21 +12,19 @@ const BOARD_H = 20;
 const FIXED_DT = 1 / 60;
 
 export default function LocalMultiplayer(): JSX.Element {
-  const statsRef = useRef<HTMLDivElement | null>(null);
-
   const runningRef = useRef(true);
   const rafGameRef = useRef(0);
   const rafShaderRef = useRef(0);
   const tPrevRef = useRef(0);
   const accRef = useRef(0);
 
-  // two games + inputs
-  const p1Ref = useRef<GameState>(createGame(BOARD_W, BOARD_H, 0xA11CE));
-  const p2Ref = useRef<GameState>(createGame(BOARD_W, BOARD_H, 0xB0B00));
+  // games + inputs
+  const p1Ref = useRef<GameState>(createGame(BOARD_W, BOARD_H, 0x0a11ce)); // left
+  const p2Ref = useRef<GameState>(createGame(BOARD_W, BOARD_H, 0xb0b00));  // right
   const p1InRef = useRef<Inputs>({});
   const p2InRef = useRef<Inputs>({});
 
-  // webgl/shader objects
+  // webgl/shader
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const glRef = useRef<WebGLRenderingContext | WebGL2RenderingContext | null>(null);
   const shaderDataRef = useRef<any>(null);
@@ -36,17 +32,13 @@ export default function LocalMultiplayer(): JSX.Element {
   const offctxRef = useRef<OffscreenCanvasRenderingContext2D | null>(null);
 
   useEffect(() => {
-    // Load Apple II font
+    // Load font
     try {
-      const ff = new FontFace("Apple II", `url(${appleFontUrl})`, {
-        style: "normal",
-        weight: "400",
-        display: "swap",
-      });
+      const ff = new FontFace("Apple II", `url(${appleFontUrl})`, { style: "normal", weight: "400", display: "swap" });
       ff.load().then((f) => (document as any).fonts.add(f));
     } catch {}
 
-    // Create offscreen + WebGL
+    // Offscreen + WebGL
     const { offscreenCanvas, offscreenCtx } = createOffscreenCanvas();
     offscreenRef.current = offscreenCanvas;
     offctxRef.current = offscreenCtx;
@@ -66,77 +58,25 @@ export default function LocalMultiplayer(): JSX.Element {
     });
     document.body.appendChild(canvas);
 
-    // renderer
+    // renderer (dual boards)
     const renderDual = makeDualRenderer(p1Ref, p2Ref, BOARD_W, BOARD_H, runningRef);
 
-    // pause helpers
-    const resume = () => {
-      if (runningRef.current) return;
-      runningRef.current = true;
-      tPrevRef.current = performance.now();
-      accRef.current = 0;
-      rafGameRef.current = requestAnimationFrame(loop);
-    };
-    const pause = () => {
-      if (!runningRef.current) return;
-      runningRef.current = false;
-      cancelAnimationFrame(rafGameRef.current);
-    };
-
-    // optional gamepad mapping via spud
-    function handlePads() {
-      (spud as any).update?.();
-      const gp = (spud as any).gamepads;
-      if (!gp) return;
-
-      // Start on any pad toggles pause
-      if (gp.anyPlayer?.buttonJustPressed?.(spud.Button.Start)) {
-        if (runningRef.current) pause(); else resume();
-      }
-
-      const p1 = gp.p1 ?? gp.connectedPlayers?.[0];
-      const p2 = gp.p2 ?? gp.connectedPlayers?.[1];
-
-      if (p1) mapPadToInputs(p1, p1InRef.current);
-      if (p2) mapPadToInputs(p2, p2InRef.current);
-    }
-
-    function mapPadToInputs(pad: any, inputs: Inputs) {
-      // one-shots
-      if (pad.buttonJustPressed?.(spud.Button.South)) inputs.hardDrop = true; // A/✕
-      if (pad.buttonJustPressed?.(spud.Button.West))  inputs.rotCCW = true;   // X/□
-      if (pad.buttonJustPressed?.(spud.Button.North)) inputs.rotCW  = true;   // Y/△
-      if (pad.buttonJustPressed?.(spud.Button.East))  inputs.rotCW  = true;   // B/○
-      // held
-      const dL = pad.isButtonDown?.(spud.Button.DpadLeft);
-      const dR = pad.isButtonDown?.(spud.Button.DpadRight);
-      const dD = pad.isButtonDown?.(spud.Button.DpadDown);
-      const snap = pad.leftStick?.snap4 ?? { x: 0, y: 0 };
-      inputs.left     = !!(dL || (snap.x ?? 0) < 0);
-      inputs.right    = !!(dR || (snap.x ?? 0) > 0);
-      inputs.softDrop = !!(dD || (snap.y ?? 0) > 0);
-    }
-
-    // shader RAF (keeps CRT/gamepads alive while paused)
+    // shader RAF
     function drawShaders() {
-      handlePads();
       const gl = glRef.current as any;
       const c = webglCanvasRef.current!;
       const data = shaderDataRef.current!;
-      // green theme; textHeight=24
       drawWithShaders(gl, c, data, renderDual, Color.green, 24);
       rafShaderRef.current = requestAnimationFrame(drawShaders);
     }
     rafShaderRef.current = requestAnimationFrame(drawShaders);
 
-    // game loop (both players)
-    let frames = 0, last = performance.now();
+    // game loop
     function tickOne(gs: GameState, ins: Inputs, dt: number) {
       step(gs, ins, dt * 1000, DEFAULT_PARAMS);
       // clear one-shots
-      ins.rotCW = false; ins.rotCCW = false; ins.hardDrop = false; ins.respawn = false;
+      ins.rotCW = ins.rotCCW = ins.hardDrop = ins.respawn = false;
     }
-
     function loop() {
       if (!runningRef.current) return;
       const now = performance.now();
@@ -149,69 +89,80 @@ export default function LocalMultiplayer(): JSX.Element {
         tickOne(p2Ref.current, p2InRef.current, FIXED_DT);
         accRef.current -= FIXED_DT;
       }
-
-      // stats
-      frames++;
-      if (now - last > 500) {
-        const fps = Math.round((frames * 1000) / (now - last));
-        frames = 0; last = now;
-        if (statsRef.current) {
-          const pads = spud.gamepads?.playerCount ?? 0;
-          statsRef.current.textContent = `Local 2P • Pads ${pads} • DPR ${Math.min(2, window.devicePixelRatio || 1)} • ${fps} FPS`;
-        }
-      }
-
       rafGameRef.current = requestAnimationFrame(loop);
     }
-
     tPrevRef.current = performance.now();
     accRef.current = 0;
     rafGameRef.current = requestAnimationFrame(loop);
 
-    // keyboard bindings
+    // --- keyboard controls (split by player, mirroring single-player semantics) ---
     function onKey(e: KeyboardEvent, down: boolean) {
-      // global pause
-      if ((e.key === "p" || e.key === "P") && down) {
-        if (runningRef.current) pause(); else resume();
+      const k = e.key;
+
+      // prevent browser scroll/focus behavior that can swallow movement keys
+      const handled = new Set([
+        "ArrowLeft", "ArrowRight", "ArrowDown", "ArrowUp", " ",
+        "a","A","d","D","s","S","q","Q","e","E","x","X",
+        "p","P","r","R",
+      ]);
+      if (handled.has(k)) e.preventDefault();
+
+      // Global pause/resume (pause only the game loop; keep shader running)
+      if ((k === "p" || k === "P") && down) {
+        if (runningRef.current) {
+          runningRef.current = false;
+          cancelAnimationFrame(rafGameRef.current);
+        } else {
+          runningRef.current = true;
+          tPrevRef.current = performance.now();
+          accRef.current = 0;
+          rafGameRef.current = requestAnimationFrame(loop);
+        }
         return;
       }
 
-      // restart both
-      if ((e.key === "r" || e.key === "R") && down && !e.repeat) {
-        p1Ref.current = createGame(BOARD_W, BOARD_H, (Math.random()*0xffffff)|0);
-        p2Ref.current = createGame(BOARD_W, BOARD_H, (Math.random()*0xffffff)|0);
+      // Global restart both (one-shot)
+      if ((k === "r" || k === "R") && down && !e.repeat) {
+        p1Ref.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
+        p2Ref.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
         return;
       }
 
-      // --- P1: Arrows + Q/E + Space ---
+      // ---------- P1 (left): WASD move, Q/E rotate, X hard drop ----------
       if (down && !e.repeat) {
-        if (e.key === " ") p1InRef.current.hardDrop = true;
-        if (e.key === "ArrowUp") p1InRef.current.rotCW = true;
-        if (e.key === "q" || e.key === "Q") p1InRef.current.rotCCW = true;
-        if (e.key === "e" || e.key === "E") p1InRef.current.rotCW = true;
+        if (k === "x" || k === "X") p1InRef.current.hardDrop = true;   // hard drop
+        if (k === "q" || k === "Q") p1InRef.current.rotCCW  = true;    // rotate CCW
+        if (k === "e" || k === "E") p1InRef.current.rotCW   = true;    // rotate CW
       }
-      switch (e.key) {
-        case "ArrowLeft": p1InRef.current.left = down; break;
-        case "ArrowRight": p1InRef.current.right = down; break;
-        case "ArrowDown": p1InRef.current.softDrop = down; break;
+      switch (k) {
+        case "a": case "A": p1InRef.current.left     = down; break;
+        case "d": case "D": p1InRef.current.right    = down; break;
+        case "s": case "S": p1InRef.current.softDrop = down; break;
       }
 
-      // --- P2: WASD + F/G + Shift ---
+      // ---------- P2 (right): arrows move, ↑ rotate CW, Space hard drop ----------
       if (down && !e.repeat) {
-        if (e.key === "Shift") p2InRef.current.hardDrop = true;
-        if (e.key === "f" || e.key === "F") p2InRef.current.rotCW = true;
-        if (e.key === "g" || e.key === "G") p2InRef.current.rotCCW = true;
+        if (k === " ")           p2InRef.current.hardDrop = true; // hard drop
+        if (k === "ArrowUp")     p2InRef.current.rotCW    = true; // rotate CW
       }
-      switch (e.key) {
-        case "a": case "A": p2InRef.current.left = down; break;
-        case "d": case "D": p2InRef.current.right = down; break;
-        case "s": case "S": p2InRef.current.softDrop = down; break;
+      switch (k) {
+        case "ArrowLeft":  p2InRef.current.left     = down; break;
+        case "ArrowRight": p2InRef.current.right    = down; break;
+        case "ArrowDown":  p2InRef.current.softDrop = down; break;
       }
     }
+
     const kd = (e: KeyboardEvent) => onKey(e, true);
     const ku = (e: KeyboardEvent) => onKey(e, false);
-    window.addEventListener("keydown", kd);
-    window.addEventListener("keyup", ku);
+    window.addEventListener("keydown", kd, { passive: false });
+    window.addEventListener("keyup", ku,   { passive: false });
+
+    // Release held movement keys if focus is lost (prevents "stuck" movement)
+    function onBlur() {
+      p1InRef.current.left = p1InRef.current.right = p1InRef.current.softDrop = false;
+      p2InRef.current.left = p2InRef.current.right = p2InRef.current.softDrop = false;
+    }
+    window.addEventListener("blur", onBlur);
 
     // keep CSS size pinned
     function onResize() {
@@ -227,31 +178,17 @@ export default function LocalMultiplayer(): JSX.Element {
       cancelAnimationFrame(rafGameRef.current);
       cancelAnimationFrame(rafShaderRef.current);
       window.removeEventListener("resize", onResize);
-      window.removeEventListener("keydown", kd);
-      window.removeEventListener("keyup", ku);
+      window.removeEventListener("keydown", kd as any);
+      window.removeEventListener("keyup", ku as any);
+      window.removeEventListener("blur", onBlur);
       try { webglCanvasRef.current?.remove(); } catch {}
     };
   }, []);
 
-  return (
-    <div
-      ref={statsRef}
-      style={{
-        position: "fixed",
-        top: 8,
-        left: 10,
-        zIndex: 2,
-        color: "#cbd5e1",
-        fontFamily: "Apple II, ui-sans-serif, system-ui",
-        fontSize: 12,
-        pointerEvents: "none",
-        textShadow: "0 1px 2px rgba(0,0,0,0.8)",
-      }}
-    />
-  );
+  return <></>;
 }
 
-// ---- dual renderer: draws both boards into the same offscreen (CRT-ready) ----
+// ---------- Dual renderer (centers + DPR-correct) ----------
 function makeDualRenderer(
   p1Ref: React.MutableRefObject<GameState>,
   p2Ref: React.MutableRefObject<GameState>,
@@ -267,10 +204,12 @@ function makeDualRenderer(
     webglCanvas: HTMLCanvasElement
   ) {
     const DPR = Math.min(2, self.devicePixelRatio || 1);
+
     if (offscreen.width !== webglCanvas.width || offscreen.height !== webglCanvas.height) {
       offscreen.width = webglCanvas.width;
       offscreen.height = webglCanvas.height;
     }
+
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
@@ -278,48 +217,47 @@ function makeDualRenderer(
     ctx.fillStyle = "#0a0f1a";
     ctx.fillRect(0, 0, offscreen.width, offscreen.height);
 
-    const vw = offscreen.width / DPR;
-    const vh = offscreen.height / DPR;
-    const margin = 24;
-    const gap = 28;
+    // layout in CSS px, draw in physical px
+    const cssW = offscreen.width / DPR;
+    const cssH = offscreen.height / DPR;
+    const MARGIN = 24;
+    const GAP = 28;
+    const HUD_ROOM = 60;
     const aspect = BOARD_H / BOARD_W;
 
-    // split the width into two columns with a gap
-    const totalW = vw - margin*2 - gap;
-    const colW = Math.floor(totalW / 2);
+    const availW = cssW - MARGIN * 2 - GAP;
+    const colW = Math.floor(availW / 2);
     const colH = Math.floor(colW * aspect);
-    const maxH = vh - margin*2 - 60; // leave HUD room
-    const cssH = Math.min(colH, maxH);
-    const cssW = Math.floor(cssH / aspect);
+    const availH = cssH - MARGIN * 2 - HUD_ROOM;
+    const boardCssH = Math.min(colH, availH);
+    const boardCssW = Math.floor(boardCssH / aspect);
 
-    const leftX = Math.floor(margin + (colW - cssW)/2);
-    const rightX = Math.floor(margin + colW + gap + (colW - cssW)/2);
-    const y = Math.floor((vh - cssH)/2 + 20);
+    const leftCssX  = Math.floor(MARGIN + (colW - boardCssW) / 2);
+    const rightCssX = Math.floor(MARGIN + colW + GAP + (colW - boardCssW) / 2);
+    const cssY      = Math.floor((cssH - boardCssH) / 2 + 20);
 
-    drawBoard(ctx, p1Ref.current, leftX, y, cssW, cssH, "#00ff7f", "P1", APPLE_FONT, DPR, BOARD_W, BOARD_H);
-    drawBoard(ctx, p2Ref.current, rightX, y, cssW, cssH, "#60a5fa", "P2", APPLE_FONT, DPR, BOARD_W, BOARD_H);
+    const pxW  = Math.floor(boardCssW * DPR);
+    const pxH  = Math.floor(boardCssH * DPR);
+    const pxX1 = Math.floor(leftCssX  * DPR);
+    const pxX2 = Math.floor(rightCssX * DPR);
+    const pxY  = Math.floor(cssY * DPR);
 
-    // center top title
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.fillStyle = "#00ff7f";
-    ctx.font = `700 ${Math.max(14, Math.round(vw * 0.018))}px ${APPLE_FONT}`;
-    ctx.shadowColor = "rgba(0,255,127,0.25)";
-    ctx.shadowBlur = Math.ceil(2 * DPR);
-    ctx.fillText("LOCAL MULTIPLAYER", offscreen.width/2, Math.max(10, Math.round(10 * DPR)));
-    ctx.shadowBlur = 0;
+    drawBoard(ctx, p1Ref.current, pxX1, pxY, pxW, pxH, APPLE_FONT, DPR, BOARD_W, BOARD_H);
+    drawBoard(ctx, p2Ref.current, pxX2, pxY, pxW, pxH, APPLE_FONT, DPR, BOARD_W, BOARD_H);
 
-    // paused overlay (for both)
+    // paused overlay
     if (!runningRef.current) {
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.fillRect(0, 0, offscreen.width, offscreen.height);
+      const minDim = Math.min(offscreen.width, offscreen.height);
+      const titleSize = Math.max(24, Math.round(minDim * 0.06));
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillStyle = "#00ff7f";
-      ctx.font = `900 ${Math.max(24, Math.round(Math.min(vw, vh) * 0.06))}px ${APPLE_FONT}`;
       ctx.shadowColor = "rgba(0,255,127,0.4)";
       ctx.shadowBlur = Math.ceil(4 * DPR);
-      ctx.fillText("PAUSED", offscreen.width/2, offscreen.height/2);
+      ctx.fillStyle = "#00ff7f";
+      ctx.font = `900 ${titleSize}px ${APPLE_FONT}`;
+      ctx.fillText("PAUSED", offscreen.width / 2, offscreen.height / 2);
       ctx.shadowBlur = 0;
     }
   };
@@ -329,8 +267,6 @@ function drawBoard(
   ctx: OffscreenCanvasRenderingContext2D,
   s: GameState,
   pxX: number, pxY: number, pxW: number, pxH: number,
-  accent: string,
-  label: string,
   APPLE_FONT: string,
   DPR: number,
   BOARD_W: number,
@@ -345,7 +281,7 @@ function drawBoard(
   function drawCell(gx: number, gy: number) {
     const x = pxX + Math.floor(gx * cell);
     const y = pxY + Math.floor(gy * cell);
-    ctx.fillStyle = accent;
+    ctx.fillStyle = "#00ff7f";
     ctx.fillRect(x, y, Math.ceil(cell), Math.ceil(cell));
     ctx.strokeStyle = "rgba(0,0,0,0.35)";
     ctx.lineWidth = Math.max(1, Math.floor(DPR));
@@ -366,26 +302,40 @@ function drawBoard(
   }
 
   // border
-  ctx.strokeStyle = accent;
+  ctx.strokeStyle = "#00ff7f";
   ctx.lineWidth = Math.max(2, Math.round(2 * DPR));
   ctx.strokeRect(pxX + 0.5, pxY + 0.5, pxW - 1, pxH - 1);
 
-  // HUD line
-  const hudY = Math.round(pxY - 10);
+  // per-board HUD (single-player style)
+  const minDim = Math.min(ctx.canvas.width, ctx.canvas.height);
+  const hudTitlePx = Math.max(14, Math.round(minDim * 0.018));
+  const hudGapPx   = Math.max(6, Math.round(hudTitlePx * 0.4));
+  const hudX = Math.round(pxX + pxW / 2);
+  const hudY = Math.round(pxY - hudGapPx * 1.2);
+
   ctx.textAlign = "center";
   ctx.textBaseline = "bottom";
-  ctx.fillStyle = accent;
-  ctx.font = `bold ${Math.max(12, Math.round(pxW * 0.06))}px ${APPLE_FONT}`;
-  const hud = `${label} • Score: ${s.score.toLocaleString()} • L${s.level} • ${s.lines} lines`;
-  ctx.fillText(hud, pxX + Math.round(pxW / 2), hudY);
+  ctx.fillStyle = "#00ff7f";
+  ctx.font = `bold ${hudTitlePx}px ${APPLE_FONT}`;
+  ctx.shadowColor = "rgba(0,255,127,0.25)";
+  ctx.shadowBlur = Math.ceil(2 * DPR);
 
-  // game over overlay on panel
+  const hudText = `Score: ${s.score.toLocaleString()} • Level: ${s.level} • Lines: ${s.lines}`;
+  ctx.fillText(hudText, hudX, hudY);
+
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 0.35;
+  const w = ctx.measureText(hudText).width;
+  ctx.fillRect(hudX - Math.ceil(w / 2), hudY + Math.ceil(DPR), Math.ceil(w), Math.ceil(DPR));
+  ctx.globalAlpha = 1;
+
+  // panel GAME OVER
   if (s.gameOver) {
     ctx.fillStyle = "rgba(0,0,0,0.55)";
     ctx.fillRect(pxX, pxY, pxW, pxH);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = accent;
+    ctx.fillStyle = "#00ff7f";
     ctx.font = `900 ${Math.max(16, Math.round(pxW * 0.15))}px ${APPLE_FONT}`;
     ctx.fillText("GAME OVER", pxX + pxW / 2, pxY + pxH / 2);
   }
