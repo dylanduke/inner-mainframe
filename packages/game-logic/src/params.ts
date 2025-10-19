@@ -10,9 +10,8 @@ export const DEFAULT_PARAMS: GameParams = {
   dasMs: 160,
   arrMs: 30, // set to 0 for instant horizontal repeat
   softDropBonus: 15,
-  lineClearScore(lines, level) {
-    const base = [0, 100, 300, 500, 800][lines] ?? 0;
-    return base * (level + 1);
+  lineClearScore(lines) {
+    return lines * 100;
   },
   levelUp(total) {
     // e.g., every 3 lines

@@ -1,20 +1,18 @@
 // src/game/CanvasGame.tsx
 import React, { useEffect, useRef, type JSX } from "react";
 import {
-  createGame, step, DEFAULT_PARAMS, type GameState, type Inputs, HIDDEN_ROWS
+  createGame, step, DEFAULT_PARAMS, type GameState, type Inputs
 } from "@inner-mainframe/game-logic";
 import { createOffscreenCanvas, drawWithShaders, setupWebglCanvas } from "@hackvegas-2025/shared";
 import { makeGameRenderer } from "./makeGameRenderer";
-// pick your tint (maps to shader theme)
-import { Color } from "@hackvegas-2025/shared"; // same enum you used
+import { Color } from "@hackvegas-2025/shared";
 import appleFontUrl from "./apple-ii.ttf?url";
 
 const BOARD_W = 10;
 const BOARD_H = 20;
 
 export default function CanvasGame(): JSX.Element {
-  // HUD + runtime as before
-  const mountRef = useRef<HTMLDivElement | null>(null);      // NEW: where we insert the WebGL canvas
+  const mountRef = useRef<HTMLDivElement | null>(null);
   const statsRef = useRef<HTMLDivElement | null>(null);
   const hudRef = useRef<HTMLDivElement | null>(null);
   const lastHudRef = useRef({ lines: -1 });
@@ -28,7 +26,6 @@ export default function CanvasGame(): JSX.Element {
   const gameRef = useRef<GameState>(createGame(BOARD_W, BOARD_H, 0xC0FFEE));
   const inputsRef = useRef<Inputs>({});
 
-  // webgl/shader objects
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const glRef = useRef<WebGLRenderingContext | WebGL2RenderingContext | null>(null);
   const shaderDataRef = useRef<any>(null);
@@ -49,13 +46,12 @@ export default function CanvasGame(): JSX.Element {
     const { offscreenCanvas, offscreenCtx } = createOffscreenCanvas();
     offscreenRef.current = offscreenCanvas;
     offctxRef.current = offscreenCtx;
-  
+
     const { canvas, gl, shaderData } = setupWebglCanvas(offscreenCanvas, offscreenCtx);
     webglCanvasRef.current = canvas;
     glRef.current = gl;
     shaderDataRef.current = shaderData;
-  
-    // make the WebGL canvas cover the entire page
+
     Object.assign(canvas.style, {
       position: "fixed",
       inset: "0",
@@ -64,46 +60,39 @@ export default function CanvasGame(): JSX.Element {
       zIndex: "0",
       display: "block",
     });
-  
-    // append to the body instead of the mount div
+
     document.body.appendChild(canvas);
 
-    // renderer that the shader pipeline will call to draw the *game* into the offscreen
     const renderGameToOffscreen = makeGameRenderer(gameRef, BOARD_W, BOARD_H, runningRef);
 
-    // shader RAF: only post-process + present
     function drawShaders() {
       const gl = glRef.current as any;
       const c = webglCanvasRef.current!;
       const data = shaderDataRef.current!;
-      // `textHeight` is used for scanline frequency calc in your CRT shader.
-      // For Tetris we can pick a stable baseline (e.g., size of a "glyph row"). Use a constant like 24.
-      drawWithShaders(gl, c, data, renderGameToOffscreen, Color.green, /*textHeight*/ 24);
+      drawWithShaders(gl, c, data, renderGameToOffscreen, Color.green, 24);
       rafShaderRef.current = requestAnimationFrame(drawShaders);
     }
     rafShaderRef.current = requestAnimationFrame(drawShaders);
 
-    // --- game loop: fixed-step update only (no direct drawing) ---
     const FIXED_DT = 1 / 60;
     let frames = 0, last = performance.now();
 
     function update(dt: number) {
       step(gameRef.current, inputsRef.current, dt * 1000, DEFAULT_PARAMS);
-      // clear one-shots
+
+      // HUD refresh only when lines changed (score changes only then)
+      const s = gameRef.current;
+      if (s.lines !== lastHudRef.current.lines) {
+        if (hudRef.current) {
+          hudRef.current.textContent = `Score: ${s.score.toLocaleString()} • Level: ${s.level}`;
+        }
+        lastHudRef.current = { lines: s.lines };
+      }
+
       inputsRef.current.rotCW = false;
       inputsRef.current.rotCCW = false;
       inputsRef.current.hardDrop = false;
       inputsRef.current.respawn = false;
-    }
-
-    function updateHudOnClearOnly() {
-      const s = gameRef.current;
-      if (s.lines !== lastHudRef.current.lines) {
-        if (hudRef.current) {
-          hudRef.current.textContent = `Score: ${s.score.toLocaleString()} • Level: ${s.level} • Lines: ${s.lines}`;
-        }
-        lastHudRef.current = { lines: s.lines };
-      }
     }
 
     function loop() {
@@ -118,9 +107,6 @@ export default function CanvasGame(): JSX.Element {
         accRef.current -= FIXED_DT;
       }
 
-      updateHudOnClearOnly();
-
-      // FPS stat (shader FPS ~ game FPS here)
       frames++;
       if (now - last > 500) {
         const fps = Math.round((frames * 1000) / (now - last));
@@ -138,21 +124,16 @@ export default function CanvasGame(): JSX.Element {
     accRef.current = 0;
     rafGameRef.current = requestAnimationFrame(loop);
 
-    // inputs (unchanged)
     function onKey(e: KeyboardEvent, down: boolean) {
       if ((e.key === "p" || e.key === "P") && down) {
         runningRef.current = !runningRef.current;
-      
+
         if (runningRef.current) {
-          // resume ONLY the game update loop
           tPrevRef.current = performance.now();
           accRef.current = 0;
           rafGameRef.current = requestAnimationFrame(loop);
-          // ⬅️ do NOT touch the shader RAF here
         } else {
-          // pause ONLY the game update loop
           cancelAnimationFrame(rafGameRef.current);
-          // ⬅️ leave rafShaderRef running so CRT/scan waves keep animating
         }
         return;
       }
@@ -164,6 +145,9 @@ export default function CanvasGame(): JSX.Element {
         if (e.key === "r" || e.key === "R") {
           gameRef.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
           lastHudRef.current = { lines: -1 };
+          if (hudRef.current) {
+            hudRef.current.textContent = `Score: 0 • Level: ${gameRef.current.level}`;
+          }
           return;
         }
       }
@@ -184,11 +168,9 @@ export default function CanvasGame(): JSX.Element {
     window.addEventListener("keydown", kd);
     window.addEventListener("keyup", ku);
 
-  
     function onResize() {
       const c = webglCanvasRef.current!;
       if (!c) return;
-      // canvas already fills the screen via CSS set in useEffect
       c.style.width = "100vw";
       c.style.height = "100vh";
     }
@@ -201,12 +183,10 @@ export default function CanvasGame(): JSX.Element {
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", kd);
       window.removeEventListener("keyup", ku);
-      // remove the WebGL canvas from DOM (optional)
       try { webglCanvasRef.current?.remove(); } catch {}
     };
   }, []);
 
-  // UI layout stays the same, but we swap the visible <canvas> for a mount div
   return (
     <div style={{
       width: "100vw", height: "100vh", display: "flex",
@@ -214,7 +194,6 @@ export default function CanvasGame(): JSX.Element {
       background: "#0a0f1a", overflow: "hidden",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-        {/* WebGL column */}
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
           <div
             ref={mountRef}
@@ -222,7 +201,6 @@ export default function CanvasGame(): JSX.Element {
               border: "2px solid #1f2937",
               borderRadius: 8,
               boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
-              // The WebGL canvas will be appended here and sized via onResize()
             }}
           />
           <div ref={statsRef}
@@ -230,14 +208,14 @@ export default function CanvasGame(): JSX.Element {
           />
         </div>
 
-        {/* Sidebar HUD unchanged */}
+        {/* HUD simplified: no Lines */}
         <div style={{
           minWidth: 200, display: "grid", gap: 12, color: "#e5e7eb",
           fontFamily: "ui-sans-serif, system-ui",
         }}>
           <div ref={hudRef}
                style={{ padding: "12px 14px", background: "#0e1626", border: "1px solid #1f2937", borderRadius: 8, fontSize: 16 }}>
-            Score: 0 • Level: 0 • Lines: 0
+            Score: 0 • Level: 0
           </div>
           <div style={{
             padding: "10px 12px", background: "#0e1626", border: "1px solid #1f2937",

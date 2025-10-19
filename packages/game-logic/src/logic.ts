@@ -150,10 +150,6 @@ export function step(state: GameState, inputs: Inputs, dtMs: number, params: Gam
     let hardDropCells = 0;
     while (!grounded(state)) {
       if (!tryMove(state, 0, +1)) break;
-      hardDropCells++;
-    }
-    if (hardDropCells > 0) {
-      state.score += hardDropCells * 2; // ← scoring
     }
     lockAndClear(state, params);
     return;
@@ -162,9 +158,6 @@ export function step(state: GameState, inputs: Inputs, dtMs: number, params: Gam
   // GRAVITY (+ optional SOFT DROP acceleration)
   const g = params.gravityCellsPerSec(state.level) + (inputs.softDrop ? params.softDropBonus : 0);
   state.fallAccum += (g * dtMs) / 1000;
-
-  // Count vertical moves this tick to award soft-drop points
-  let softDropCells = 0;
 
   while (state.fallAccum >= 1 && state.active) {
     if (!tryMove(state, 0, +1)) {
@@ -177,16 +170,9 @@ export function step(state: GameState, inputs: Inputs, dtMs: number, params: Gam
       }
       break;
     } else {
-      // moved down successfully
-      if (inputs.softDrop) softDropCells++; // ← count only when ↓ held
-      state.lockTimerMs = 0; // any movement resets lock delay
+      state.lockTimerMs = 0; 
     }
     state.fallAccum -= 1;
-  }
-
-  // Award soft-drop points (+1 per cell) after vertical resolution
-  if (softDropCells > 0) {
-    state.score += softDropCells;
   }
 
   // Respawn (your "R") — just spawn a new piece, ignoring current

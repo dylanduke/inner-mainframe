@@ -18,8 +18,8 @@ type MenuItem = { key: Route; label: string };
 const MENU_ITEMS: MenuItem[] = [
   // { key: "single", label: "▶  Single Player" },
   // { key: "local",  label: "⧉  Local Multiplayer" },
-  { key: "single", label: "Solo" },
-  { key: "local",  label: "Multiplayer" },
+  { key: "single", label: "Enter" },
+  { key: "local",  label: "???" },
 ];
 
 // What we keep from the renderer to enable hit-testing

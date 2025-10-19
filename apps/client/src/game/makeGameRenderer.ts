@@ -12,7 +12,7 @@ export function makeGameRenderer(
   let lastLines = -1;
   let displayScore = 0;
   let displayLevel = 0;
-  let displayLines = 0;
+  
 
   return function renderGameToOffscreen(
     offscreen: OffscreenCanvas,
@@ -92,7 +92,6 @@ export function makeGameRenderer(
       lastLines = s.lines;
       displayScore = s.score;
       displayLevel = s.level;
-      displayLines = s.lines;
     }
 
     // ---- Draw HUD (always visible; values only change on line-clear) ----
@@ -110,7 +109,7 @@ export function makeGameRenderer(
     ctx.shadowColor = "rgba(0,255,127,0.25)";
     ctx.shadowBlur = Math.ceil(2 * DPR);
 
-    const hudText = `Score: ${displayScore.toLocaleString()} • Level: ${displayLevel} • Lines: ${displayLines}`;
+    const hudText = `Score: ${displayScore.toLocaleString()} • Level: ${displayLevel}`;
     ctx.fillText(hudText, hudX, hudY);
 
     ctx.shadowBlur = 0;
