@@ -7,7 +7,7 @@ import {
 import { createOffscreenCanvas, drawWithShaders, setupWebglCanvas, Color } from "@hackvegas-2025/shared";
 import appleFontUrl from "./apple-ii.ttf?url";
 
-// 🚀 Spud gamepad support
+// Spud gamepad support
 import { gamepads, Button, HapticIntensity } from "@spud.gg/api";
 
 const BOARD_W = 10;
@@ -15,6 +15,7 @@ const BOARD_H = 20;
 const FIXED_DT = 1 / 60;
 
 export default function LocalMultiplayer(): JSX.Element {
+  // runtime flags
   const runningRef = useRef(true);
   const matchOverRef = useRef(false);
   const rafGameRef = useRef(0);
@@ -22,11 +23,38 @@ export default function LocalMultiplayer(): JSX.Element {
   const tPrevRef = useRef(0);
   const accRef = useRef(0);
 
+  // game states & inputs
   const p1Ref = useRef<GameState>(createGame(BOARD_W, BOARD_H, 0x0a11ce));
   const p2Ref = useRef<GameState>(createGame(BOARD_W, BOARD_H, 0x0b0b00));
   const p1InRef = useRef<Inputs>({});
   const p2InRef = useRef<Inputs>({});
 
+  // keyboard-held state lives SEPARATELY from the per-frame input objects
+  const kbHeldRef = useRef({
+    p1: { left: false, right: false, softDrop: false },
+    p2: { left: false, right: false, softDrop: false },
+  });
+
+  // per-frame latched edges (consumed once on the first fixed step each frame)
+  const edgesRef = useRef({
+    p1: { rotCW: false, rotCCW: false, hardDrop: false },
+    p2: { rotCW: false, rotCCW: false, hardDrop: false },
+    pause: false,
+    restart: false,
+  });
+
+  // seat bindings: lock P1->index 0, P2->index 1 (no tap-to-claim)
+  const seatRef = useRef<{ p1: 0 | 1 | 2 | 3 | null; p2: 0 | 1 | 2 | 3 | null }>({ p1: 0, p2: 1 });
+
+  function padByIndex(i: 0 | 1 | 2 | 3 | null) {
+    if (i === 0) return gamepads.p1;
+    if (i === 1) return gamepads.p2;
+    if (i === 2) return gamepads.p3;
+    if (i === 3) return gamepads.p4;
+    return gamepads.p1;
+  }
+
+  // webgl plumbing
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const glRef = useRef<WebGLRenderingContext | WebGL2RenderingContext | null>(null);
   const shaderDataRef = useRef<any>(null);
@@ -34,11 +62,13 @@ export default function LocalMultiplayer(): JSX.Element {
   const offctxRef = useRef<OffscreenCanvasRenderingContext2D | null>(null);
 
   useEffect(() => {
+    // Font
     try {
       const ff = new FontFace("Apple II", `url(${appleFontUrl})`, { style: "normal", weight: "400", display: "swap" });
       ff.load().then((f) => (document as any).fonts.add(f));
     } catch {}
 
+    // Offscreen + WebGL
     const { offscreenCanvas, offscreenCtx } = createOffscreenCanvas();
     offscreenRef.current = offscreenCanvas;
     offctxRef.current = offscreenCtx;
@@ -60,6 +90,7 @@ export default function LocalMultiplayer(): JSX.Element {
 
     const renderDual = makeDualRenderer(p1Ref, p2Ref, BOARD_W, BOARD_H, runningRef, matchOverRef);
 
+    // --- Single shader loop ---
     function drawShaders() {
       const gl = glRef.current as any;
       const c = webglCanvasRef.current!;
@@ -69,101 +100,115 @@ export default function LocalMultiplayer(): JSX.Element {
     }
     rafShaderRef.current = requestAnimationFrame(drawShaders);
 
-    function tickOne(gs: GameState, ins: Inputs, dt: number) {
-      step(gs, ins, dt * 1000, DEFAULT_PARAMS);
-      // one-shot buttons reset each fixed tick
-      ins.rotCW = ins.rotCCW = ins.hardDrop = ins.respawn = false;
+    // helpers ----------------------------------------------------
+
+    function togglePause() {
+      runningRef.current = !runningRef.current;
+      // keep loop alive; just reset time origin so we don't jump after unpausing
+      tPrevRef.current = performance.now();
+      accRef.current = 0;
+    }
+
+    function restartMatch() {
+      p1Ref.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
+      p2Ref.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
+      matchOverRef.current = false;
+      runningRef.current = true;
+      tPrevRef.current = performance.now();
+      accRef.current = 0;
+
+      try { padByIndex(seatRef.current.p1).rumble(60, HapticIntensity.Balanced); } catch {}
+      try { padByIndex(seatRef.current.p2).rumble(60, HapticIntensity.Balanced); } catch {}
     }
 
     function stopMatchIfOver() {
       if (!matchOverRef.current && (p1Ref.current.gameOver || p2Ref.current.gameOver)) {
         matchOverRef.current = true;
-        runningRef.current = false;
-        cancelAnimationFrame(rafGameRef.current);
+        runningRef.current = false;   // pause sim, loop keeps polling so restart works
       }
     }
 
-    function readGamepads() {
-      // Helper to read one player's gamepad and return Inputs that we merge in
-      const gpToInputs = (p: typeof gamepads.p1): Inputs => {
-        const out: Inputs = {};
+    // tick one state once (with optional first-step edges)
+    function tickOne(
+      gs: GameState,
+      ins: Inputs,
+      firstStepEdges?: { rotCW: boolean; rotCCW: boolean; hardDrop: boolean }
+    ) {
+      if (firstStepEdges) {
+        ins.rotCW = firstStepEdges.rotCW;
+        ins.rotCCW = firstStepEdges.rotCCW;
+        ins.hardDrop = firstStepEdges.hardDrop;
+      } else {
+        ins.rotCW = ins.rotCCW = ins.hardDrop = false;
+      }
 
-        if (!p.gamepad) return out;
+      step(gs, ins, FIXED_DT * 1000, DEFAULT_PARAMS);
 
-        // Held movement: D-pad OR left stick (snap to 4-way)
-        const dpadLeft  = p.isButtonDown(Button.DpadLeft);
-        const dpadRight = p.isButtonDown(Button.DpadRight);
-        const dpadDown  = p.isButtonDown(Button.DpadDown);
-        const { x: sx, y: sy } = p.leftStick.snap4;
+      // one-shot buttons reset each fixed tick (safety)
+      ins.rotCW = ins.rotCCW = ins.hardDrop = ins.respawn = false;
+    }
 
-        out.left     = dpadLeft  || sx < 0;
-        out.right    = dpadRight || sx > 0;
-        out.softDrop = dpadDown  || sy > 0;
+    // -------- SAMPLE GAMEPADS ONCE PER FRAME --------------------
+    function sampleGamepadsPerFrame() {
+      const p1Pad = padByIndex(seatRef.current.p1);
+      const p2Pad = padByIndex(seatRef.current.p2);
 
-        // One-shots: Face buttons for rotate / hard drop
-        if (p.buttonJustPressed(Button.West))  out.rotCCW  = true; // X / □
-        if (p.buttonJustPressed(Button.East))  out.rotCW   = true; // B / ○
-        if (p.buttonJustPressed(Button.South)) {              // A / ✕
-          out.hardDrop = true;
-          // Nice tactile pop for hard drop
-          p.rumble(40, HapticIntensity.Balanced);
+      const gpToHeldAndEdges = (p: typeof gamepads.p1) => {
+        const held = { left: false, right: false, softDrop: false };
+        const edges = { rotCW: false, rotCCW: false, hardDrop: false };
+
+        if (p.gamepad) {
+          const { x: sx, y: sy } = p.leftStick.snap4;
+          held.left     = p.isButtonDown(Button.DpadLeft)  || sx < -0.5;
+          held.right    = p.isButtonDown(Button.DpadRight) || sx > 0.5;
+          held.softDrop = p.isButtonDown(Button.DpadDown)  || sy > 0.5;
+
+          if (p.buttonJustPressed(Button.West))  edges.rotCCW = true; // X / □
+          if (p.buttonJustPressed(Button.East))  edges.rotCW  = true; // B / ○
+          if (p.buttonJustPressed(Button.South)) {                    // A / ✕
+            edges.hardDrop = true;
+            try { p.rumble(40, HapticIntensity.Balanced); } catch {}
+          }
         }
-
-        return out;
+        return { held, edges };
       };
 
-      // Merge gamepad inputs into the live keyboard inputs for each player
-      const p1gp = gpToInputs(gamepads.p1);
-      const p2gp = gpToInputs(gamepads.p2);
+      const gp1 = gpToHeldAndEdges(p1Pad);
+      const gp2 = gpToHeldAndEdges(p2Pad);
 
-      // Merge booleans (held)
-      p1InRef.current.left     = !!(p1InRef.current.left     || p1gp.left);
-      p1InRef.current.right    = !!(p1InRef.current.right    || p1gp.right);
-      p1InRef.current.softDrop = !!(p1InRef.current.softDrop || p1gp.softDrop);
+      // Overwrite helds from (gamepadHeld OR keyboardHeld) — no feedback loop with previous frame
+      p1InRef.current.left     = !!(gp1.held.left     || kbHeldRef.current.p1.left);
+      p1InRef.current.right    = !!(gp1.held.right    || kbHeldRef.current.p1.right);
+      p1InRef.current.softDrop = !!(gp1.held.softDrop || kbHeldRef.current.p1.softDrop);
 
-      p2InRef.current.left     = !!(p2InRef.current.left     || p2gp.left);
-      p2InRef.current.right    = !!(p2InRef.current.right    || p2gp.right);
-      p2InRef.current.softDrop = !!(p2InRef.current.softDrop || p2gp.softDrop);
+      p2InRef.current.left     = !!(gp2.held.left     || kbHeldRef.current.p2.left);
+      p2InRef.current.right    = !!(gp2.held.right    || kbHeldRef.current.p2.right);
+      p2InRef.current.softDrop = !!(gp2.held.softDrop || kbHeldRef.current.p2.softDrop);
 
-      // Merge one-shots (edge-triggered)
-      if (p1gp.rotCW)     p1InRef.current.rotCW   = true;
-      if (p1gp.rotCCW)    p1InRef.current.rotCCW  = true;
-      if (p1gp.hardDrop)  p1InRef.current.hardDrop = true;
+      // One-shots: latch per frame
+      if (gp1.edges.rotCW)    edgesRef.current.p1.rotCW = true;
+      if (gp1.edges.rotCCW)   edgesRef.current.p1.rotCCW = true;
+      if (gp1.edges.hardDrop) edgesRef.current.p1.hardDrop = true;
 
-      if (p2gp.rotCW)     p2InRef.current.rotCW   = true;
-      if (p2gp.rotCCW)    p2InRef.current.rotCCW  = true;
-      if (p2gp.hardDrop)  p2InRef.current.hardDrop = true;
+      if (gp2.edges.rotCW)    edgesRef.current.p2.rotCW = true;
+      if (gp2.edges.rotCCW)   edgesRef.current.p2.rotCCW = true;
+      if (gp2.edges.hardDrop) edgesRef.current.p2.hardDrop = true;
 
-      // IMPORTANT: snapshot current buttons for next frame (for justPressed/etc.)
+      // Pause / Restart from either bound controller
+      const p1Pause = p1Pad.buttonJustPressed(Button.Start) || p1Pad.buttonJustPressed(Button.Select);
+      const p2Pause = p2Pad.buttonJustPressed(Button.Start) || p2Pad.buttonJustPressed(Button.Select);
+      if (p1Pause || p2Pause) {
+        edgesRef.current.pause = true;
+      }
+      const p1Restart = p1Pad.buttonJustPressed(Button.North);
+      const p2Restart = p2Pad.buttonJustPressed(Button.North);
+      if (p1Restart || p2Restart) {
+        edgesRef.current.restart = true;
+      }
       gamepads.clearInputs();
     }
 
-    function loop() {
-      if (!runningRef.current) return;
-
-      const now = performance.now();
-      let dt = (now - tPrevRef.current) / 1000;
-      tPrevRef.current = now;
-
-      accRef.current += dt;
-
-      // Read gamepads once per visual frame, before stepping fixed updates
-      readGamepads();
-
-      while (accRef.current >= FIXED_DT) {
-        tickOne(p1Ref.current, p1InRef.current, FIXED_DT);
-        tickOne(p2Ref.current, p2InRef.current, FIXED_DT);
-        accRef.current -= FIXED_DT;
-      }
-
-      stopMatchIfOver();
-      rafGameRef.current = requestAnimationFrame(loop);
-    }
-
-    tPrevRef.current = performance.now();
-    accRef.current = 0;
-    rafGameRef.current = requestAnimationFrame(loop);
-
+    // Keyboard handling → writes to kbHeldRef (not the per-frame Inputs)
     function onKey(e: KeyboardEvent, down: boolean) {
       const k = e.key;
       const handled = new Set([
@@ -174,54 +219,32 @@ export default function LocalMultiplayer(): JSX.Element {
       ]);
       if (handled.has(k)) e.preventDefault();
 
-      if ((k === "p" || k === "P") && down) {
-        if (!matchOverRef.current) {
-          if (runningRef.current) {
-            runningRef.current = false;
-            cancelAnimationFrame(rafGameRef.current);
-          } else {
-            runningRef.current = true;
-            tPrevRef.current = performance.now();
-            accRef.current = 0;
-            rafGameRef.current = requestAnimationFrame(loop);
-          }
-        }
-        return;
-      }
-
-      if ((k === "r" || k === "R") && down && !e.repeat) {
-        p1Ref.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
-        p2Ref.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
-        matchOverRef.current = false;
-        if (!runningRef.current) {
-          runningRef.current = true;
-          tPrevRef.current = performance.now();
-          accRef.current = 0;
-          rafGameRef.current = requestAnimationFrame(loop);
-        }
-        return;
-      }
-
+      // Pause / restart via edges
+      if ((k === "p" || k === "P") && down) { edgesRef.current.pause = true; return; }
+      if ((k === "r" || k === "R") && down && !e.repeat) { edgesRef.current.restart = true; return; }
       if (matchOverRef.current) return;
 
+      // One-shots (edge latched)
       if (down && !e.repeat) {
-        // P1 one-shots
-        if (k === "x" || k === "X") p1InRef.current.hardDrop = true;
-        if (k === "q" || k === "Q") p1InRef.current.rotCCW = true;
-        if (k === "e" || k === "E") p1InRef.current.rotCW = true;
+        if (k === "x" || k === "X") edgesRef.current.p1.hardDrop = true;
+        if (k === "q" || k === "Q") edgesRef.current.p1.rotCCW = true;
+        if (k === "e" || k === "E") edgesRef.current.p1.rotCW  = true;
 
-        // P2 one-shots
-        if (k === " ") p2InRef.current.hardDrop = true;
-        if (k === "," || k === "<") p2InRef.current.rotCCW = true; // '<'
-        if (k === "." || k === ">") p2InRef.current.rotCW = true;  // '>'
+        if (k === " ") edgesRef.current.p2.hardDrop = true;
+        if (k === "," || k === "<") edgesRef.current.p2.rotCCW = true;
+        if (k === "." || k === ">") edgesRef.current.p2.rotCW  = true;
       }
+
+      // Helds → update the separate kbHeldRef
       switch (k) {
-        case "a": case "A": p1InRef.current.left = down; break;
-        case "d": case "D": p1InRef.current.right = down; break;
-        case "s": case "S": p1InRef.current.softDrop = down; break;
-        case "ArrowLeft":  p2InRef.current.left = down; break;
-        case "ArrowRight": p2InRef.current.right = down; break;
-        case "ArrowDown":  p2InRef.current.softDrop = down; break;
+        // P1 WASD
+        case "a": case "A": kbHeldRef.current.p1.left = down; break;
+        case "d": case "D": kbHeldRef.current.p1.right = down; break;
+        case "s": case "S": kbHeldRef.current.p1.softDrop = down; break;
+        // P2 arrows
+        case "ArrowLeft":  kbHeldRef.current.p2.left = down; break;
+        case "ArrowRight": kbHeldRef.current.p2.right = down; break;
+        case "ArrowDown":  kbHeldRef.current.p2.softDrop = down; break;
       }
     }
 
@@ -231,10 +254,50 @@ export default function LocalMultiplayer(): JSX.Element {
     window.addEventListener("keyup", ku, { passive: false });
 
     function onBlur() {
-      p1InRef.current.left = p1InRef.current.right = p1InRef.current.softDrop = false;
-      p2InRef.current.left = p2InRef.current.right = p2InRef.current.softDrop = false;
+      kbHeldRef.current.p1.left = kbHeldRef.current.p1.right = kbHeldRef.current.p1.softDrop = false;
+      kbHeldRef.current.p2.left = kbHeldRef.current.p2.right = kbHeldRef.current.p2.softDrop = false;
     }
     window.addEventListener("blur", onBlur);
+
+    // main loop (always running so pads can unpause/restart)
+    function loop() {
+      const now = performance.now();
+      let dt = (now - tPrevRef.current) / 1000;
+      tPrevRef.current = now;
+
+      // 1) Sample controllers once per rAF
+      sampleGamepadsPerFrame();
+
+      // 2) Global edges (work even while paused or match over)
+      if (edgesRef.current.pause)   { edgesRef.current.pause = false; togglePause(); }
+      if (edgesRef.current.restart) { edgesRef.current.restart = false; restartMatch(); }
+
+      // 3) Fixed updates only if running
+      if (runningRef.current && !matchOverRef.current) {
+        accRef.current += dt;
+        let first = true;
+        while (accRef.current >= FIXED_DT) {
+          tickOne(p1Ref.current, p1InRef.current, first ? edgesRef.current.p1 : undefined);
+          tickOne(p2Ref.current, p2InRef.current, first ? edgesRef.current.p2 : undefined);
+          first = false;
+          accRef.current -= FIXED_DT;
+        }
+        // clear latched one-shots after first fixed step consumed them
+        edgesRef.current.p1.rotCW = edgesRef.current.p1.rotCCW = edgesRef.current.p1.hardDrop = false;
+        edgesRef.current.p2.rotCW = edgesRef.current.p2.rotCCW = edgesRef.current.p2.hardDrop = false;
+
+        stopMatchIfOver();
+      } else {
+        accRef.current = 0;
+      }
+
+      rafGameRef.current = requestAnimationFrame(loop);
+    }
+
+    // start main loop
+    tPrevRef.current = performance.now();
+    accRef.current = 0;
+    rafGameRef.current = requestAnimationFrame(loop);
 
     function onResize() {
       const c = webglCanvasRef.current!;
@@ -258,6 +321,8 @@ export default function LocalMultiplayer(): JSX.Element {
 
   return <></>;
 }
+
+// ---------------- Rendering ----------------
 
 function makeDualRenderer(
   p1Ref: React.MutableRefObject<GameState>,
@@ -314,6 +379,7 @@ function makeDualRenderer(
     drawBoard(ctx, p1Ref.current, pxX1, pxY, pxW, pxH, APPLE_FONT, DPR, BOARD_W, BOARD_H, matchOverRef.current);
     drawBoard(ctx, p2Ref.current, pxX2, pxY, pxW, pxH, APPLE_FONT, DPR, BOARD_W, BOARD_H, matchOverRef.current);
 
+    // global overlays
     if (!runningRef.current && !matchOverRef.current) {
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.fillRect(0, 0, offscreen.width, offscreen.height);
