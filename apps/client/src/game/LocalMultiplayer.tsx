@@ -7,6 +7,9 @@ import {
 import { createOffscreenCanvas, drawWithShaders, setupWebglCanvas, Color } from "@hackvegas-2025/shared";
 import appleFontUrl from "./apple-ii.ttf?url";
 
+// 🚀 Spud gamepad support
+import { gamepads, Button, HapticIntensity } from "@spud.gg/api";
+
 const BOARD_W = 10;
 const BOARD_H = 20;
 const FIXED_DT = 1 / 60;
@@ -68,7 +71,7 @@ export default function LocalMultiplayer(): JSX.Element {
 
     function tickOne(gs: GameState, ins: Inputs, dt: number) {
       step(gs, ins, dt * 1000, DEFAULT_PARAMS);
-      // one-shot buttons
+      // one-shot buttons reset each fixed tick
       ins.rotCW = ins.rotCCW = ins.hardDrop = ins.respawn = false;
     }
 
@@ -80,13 +83,73 @@ export default function LocalMultiplayer(): JSX.Element {
       }
     }
 
+    function readGamepads() {
+      // Helper to read one player's gamepad and return Inputs that we merge in
+      const gpToInputs = (p: typeof gamepads.p1): Inputs => {
+        const out: Inputs = {};
+
+        if (!p.gamepad) return out;
+
+        // Held movement: D-pad OR left stick (snap to 4-way)
+        const dpadLeft  = p.isButtonDown(Button.DpadLeft);
+        const dpadRight = p.isButtonDown(Button.DpadRight);
+        const dpadDown  = p.isButtonDown(Button.DpadDown);
+        const { x: sx, y: sy } = p.leftStick.snap4;
+
+        out.left     = dpadLeft  || sx < 0;
+        out.right    = dpadRight || sx > 0;
+        out.softDrop = dpadDown  || sy > 0;
+
+        // One-shots: Face buttons for rotate / hard drop
+        if (p.buttonJustPressed(Button.West))  out.rotCCW  = true; // X / □
+        if (p.buttonJustPressed(Button.East))  out.rotCW   = true; // B / ○
+        if (p.buttonJustPressed(Button.South)) {              // A / ✕
+          out.hardDrop = true;
+          // Nice tactile pop for hard drop
+          p.rumble(40, HapticIntensity.Balanced);
+        }
+
+        return out;
+      };
+
+      // Merge gamepad inputs into the live keyboard inputs for each player
+      const p1gp = gpToInputs(gamepads.p1);
+      const p2gp = gpToInputs(gamepads.p2);
+
+      // Merge booleans (held)
+      p1InRef.current.left     = !!(p1InRef.current.left     || p1gp.left);
+      p1InRef.current.right    = !!(p1InRef.current.right    || p1gp.right);
+      p1InRef.current.softDrop = !!(p1InRef.current.softDrop || p1gp.softDrop);
+
+      p2InRef.current.left     = !!(p2InRef.current.left     || p2gp.left);
+      p2InRef.current.right    = !!(p2InRef.current.right    || p2gp.right);
+      p2InRef.current.softDrop = !!(p2InRef.current.softDrop || p2gp.softDrop);
+
+      // Merge one-shots (edge-triggered)
+      if (p1gp.rotCW)     p1InRef.current.rotCW   = true;
+      if (p1gp.rotCCW)    p1InRef.current.rotCCW  = true;
+      if (p1gp.hardDrop)  p1InRef.current.hardDrop = true;
+
+      if (p2gp.rotCW)     p2InRef.current.rotCW   = true;
+      if (p2gp.rotCCW)    p2InRef.current.rotCCW  = true;
+      if (p2gp.hardDrop)  p2InRef.current.hardDrop = true;
+
+      // IMPORTANT: snapshot current buttons for next frame (for justPressed/etc.)
+      gamepads.clearInputs();
+    }
+
     function loop() {
       if (!runningRef.current) return;
+
       const now = performance.now();
       let dt = (now - tPrevRef.current) / 1000;
       tPrevRef.current = now;
 
       accRef.current += dt;
+
+      // Read gamepads once per visual frame, before stepping fixed updates
+      readGamepads();
+
       while (accRef.current >= FIXED_DT) {
         tickOne(p1Ref.current, p1InRef.current, FIXED_DT);
         tickOne(p2Ref.current, p2InRef.current, FIXED_DT);
@@ -103,17 +166,14 @@ export default function LocalMultiplayer(): JSX.Element {
 
     function onKey(e: KeyboardEvent, down: boolean) {
       const k = e.key;
-
-      // Keys we fully handle (prevent scrolling, etc.)
       const handled = new Set([
         "ArrowLeft","ArrowRight","ArrowDown","ArrowUp"," ",
         "a","A","d","D","s","S","q","Q","e","E","x","X",
-        ",",".","<",">",
         "p","P","r","R",
+        ",",".","<",">",
       ]);
       if (handled.has(k)) e.preventDefault();
 
-      // Pause
       if ((k === "p" || k === "P") && down) {
         if (!matchOverRef.current) {
           if (runningRef.current) {
@@ -129,7 +189,6 @@ export default function LocalMultiplayer(): JSX.Element {
         return;
       }
 
-      // Restart
       if ((k === "r" || k === "R") && down && !e.repeat) {
         p1Ref.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
         p2Ref.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
@@ -145,28 +204,21 @@ export default function LocalMultiplayer(): JSX.Element {
 
       if (matchOverRef.current) return;
 
-      // One-shot actions on keydown (no repeats)
       if (down && !e.repeat) {
-        // P1: X hard drop, Q/E rotation
+        // P1 one-shots
         if (k === "x" || k === "X") p1InRef.current.hardDrop = true;
         if (k === "q" || k === "Q") p1InRef.current.rotCCW = true;
-        if (k === "e" || k === "E") p1InRef.current.rotCW  = true;
+        if (k === "e" || k === "E") p1InRef.current.rotCW = true;
 
-        // P2: Space hard drop, </> rotation (accept both shifted and unshifted)
+        // P2 one-shots
         if (k === " ") p2InRef.current.hardDrop = true;
-        if (k === "," || k === "<") p2InRef.current.rotCCW = true; // <
-        if (k === "." || k === ">") p2InRef.current.rotCW  = true; // >
-        // NOTE: ArrowUp no longer rotates P2
+        if (k === "," || k === "<") p2InRef.current.rotCCW = true; // '<'
+        if (k === "." || k === ">") p2InRef.current.rotCW = true;  // '>'
       }
-
-      // Held directions
       switch (k) {
-        // P1 movement (A/D/S)
         case "a": case "A": p1InRef.current.left = down; break;
         case "d": case "D": p1InRef.current.right = down; break;
         case "s": case "S": p1InRef.current.softDrop = down; break;
-
-        // P2 movement (Arrow keys)
         case "ArrowLeft":  p2InRef.current.left = down; break;
         case "ArrowRight": p2InRef.current.right = down; break;
         case "ArrowDown":  p2InRef.current.softDrop = down; break;
@@ -176,7 +228,7 @@ export default function LocalMultiplayer(): JSX.Element {
     const kd = (e: KeyboardEvent) => onKey(e, true);
     const ku = (e: KeyboardEvent) => onKey(e, false);
     window.addEventListener("keydown", kd, { passive: false });
-    window.addEventListener("keyup",   ku, { passive: false });
+    window.addEventListener("keyup", ku, { passive: false });
 
     function onBlur() {
       p1InRef.current.left = p1InRef.current.right = p1InRef.current.softDrop = false;

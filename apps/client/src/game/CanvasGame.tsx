@@ -8,6 +8,9 @@ import { makeGameRenderer } from "./makeGameRenderer";
 import { Color } from "@hackvegas-2025/shared";
 import appleFontUrl from "./apple-ii.ttf?url";
 
+// Spud
+import { gamepads, Button, HapticIntensity } from "@spud.gg/api";
+
 const BOARD_W = 10;
 const BOARD_H = 20;
 
@@ -26,6 +29,15 @@ export default function CanvasGame(): JSX.Element {
   const gameRef = useRef<GameState>(createGame(BOARD_W, BOARD_H, 0xC0FFEE));
   const inputsRef = useRef<Inputs>({});
 
+  // per-frame latched one-shot flags (edge triggers)
+  const edgeRef = useRef({
+    rotCW: false,
+    rotCCW: false,
+    hardDrop: false,
+    restart: false,
+    pause: false,
+  });
+
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const glRef = useRef<WebGLRenderingContext | WebGL2RenderingContext | null>(null);
   const shaderDataRef = useRef<any>(null);
@@ -33,6 +45,7 @@ export default function CanvasGame(): JSX.Element {
   const offctxRef = useRef<OffscreenCanvasRenderingContext2D | null>(null);
 
   useEffect(() => {
+    // Font
     try {
       const ff = new FontFace("Apple II", `url(${appleFontUrl})`, {
         style: "normal",
@@ -43,6 +56,8 @@ export default function CanvasGame(): JSX.Element {
     } catch (e) {
       console.warn("Font load failed", e);
     }
+
+    // Offscreen + WebGL
     const { offscreenCanvas, offscreenCtx } = createOffscreenCanvas();
     offscreenRef.current = offscreenCanvas;
     offctxRef.current = offscreenCtx;
@@ -60,7 +75,6 @@ export default function CanvasGame(): JSX.Element {
       zIndex: "0",
       display: "block",
     });
-
     document.body.appendChild(canvas);
 
     const renderGameToOffscreen = makeGameRenderer(gameRef, BOARD_W, BOARD_H, runningRef);
@@ -74,80 +88,67 @@ export default function CanvasGame(): JSX.Element {
     }
     rafShaderRef.current = requestAnimationFrame(drawShaders);
 
-    const FIXED_DT = 1 / 60;
-    let frames = 0, last = performance.now();
-
-    function update(dt: number) {
-      step(gameRef.current, inputsRef.current, dt * 1000, DEFAULT_PARAMS);
-
-      // HUD refresh only when lines changed (score changes only then)
-      const s = gameRef.current;
-      if (s.lines !== lastHudRef.current.lines) {
-        if (hudRef.current) {
-          hudRef.current.textContent = `Score: ${s.score.toLocaleString()} • Level: ${s.level}`;
-        }
-        lastHudRef.current = { lines: s.lines };
-      }
-
-      inputsRef.current.rotCW = false;
-      inputsRef.current.rotCCW = false;
-      inputsRef.current.hardDrop = false;
-      inputsRef.current.respawn = false;
+    // Helpers
+    function togglePause() {
+      runningRef.current = !runningRef.current;
+      // reset time origin so we don't jump when unpausing
+      tPrevRef.current = performance.now();
+      accRef.current = 0;
     }
 
-    function loop() {
-      if (!runningRef.current) return;
-      const now = performance.now();
-      let dt = (now - tPrevRef.current) / 1000;
-      tPrevRef.current = now;
-
-      accRef.current += dt;
-      while (accRef.current >= FIXED_DT) {
-        update(FIXED_DT);
-        accRef.current -= FIXED_DT;
+    function restartGame() {
+      gameRef.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
+      lastHudRef.current = { lines: -1 };
+      if (hudRef.current) {
+        hudRef.current.textContent = `Score: 0 • Level: ${gameRef.current.level}`;
       }
-
-      frames++;
-      if (now - last > 500) {
-        const fps = Math.round((frames * 1000) / (now - last));
-        frames = 0;
-        last = now;
-        if (statsRef.current) {
-          statsRef.current.textContent = `DPR ${Math.min(2, window.devicePixelRatio || 1)} • ${fps} FPS`;
-        }
-      }
-
-      rafGameRef.current = requestAnimationFrame(loop);
+      try { gamepads.singlePlayer.rumble(60, HapticIntensity.Balanced); } catch {}
     }
 
-    tPrevRef.current = performance.now();
-    accRef.current = 0;
-    rafGameRef.current = requestAnimationFrame(loop);
+    // -------- Spud sampling (once per rAF) ----------
+    function sampleGamepadPerFrame() {
+      const p = gamepads.singlePlayer;
 
+      // Held movement: DPad OR left stick (snap4)
+      const snap = p.leftStick.snap4;
+      inputsRef.current.left = p.isButtonDown(Button.DpadLeft) || snap.x < -0.5;
+      inputsRef.current.right = p.isButtonDown(Button.DpadRight) || snap.x > 0.5;
+      inputsRef.current.softDrop = p.isButtonDown(Button.DpadDown) || snap.y > 0.5;
+
+      // Edge-trigger latching (only set true here; consumed once inside fixed-step)
+      if (p.buttonJustPressed(Button.East)) { // B / ○
+        edgeRef.current.rotCW = true;
+        try { p.rumble(40, HapticIntensity.Light); } catch {}
+      }
+      if (p.buttonJustPressed(Button.West)) { // X / □
+        edgeRef.current.rotCCW = true;
+        try { p.rumble(40, HapticIntensity.Light); } catch {}
+      }
+      if (p.buttonJustPressed(Button.South)) { // A / ✕
+        edgeRef.current.hardDrop = true;
+        try { p.rumble(50, HapticIntensity.Heavy); } catch {}
+      }
+      if (p.buttonJustPressed(Button.North)) { // Y / △
+        edgeRef.current.restart = true;
+      }
+      if (p.buttonJustPressed(Button.Start) || p.buttonJustPressed(Button.Select)) {
+        edgeRef.current.pause = true;
+      }
+    }
+
+    // Keyboard (unchanged)
     function onKey(e: KeyboardEvent, down: boolean) {
       if ((e.key === "p" || e.key === "P") && down) {
-        runningRef.current = !runningRef.current;
-
-        if (runningRef.current) {
-          tPrevRef.current = performance.now();
-          accRef.current = 0;
-          rafGameRef.current = requestAnimationFrame(loop);
-        } else {
-          cancelAnimationFrame(rafGameRef.current);
-        }
+        edgeRef.current.pause = true; // route through same pause path
         return;
       }
       if (down && !e.repeat) {
-        if (e.key === " ") inputsRef.current.hardDrop = true;
-        if (e.key === "ArrowUp") inputsRef.current.rotCW = true;
-        if (e.key === "q" || e.key === "Q") inputsRef.current.rotCCW = true;
-        if (e.key === "e" || e.key === "E") inputsRef.current.rotCW = true;
+        if (e.key === " ") edgeRef.current.hardDrop = true;
+        if (e.key === "ArrowUp") edgeRef.current.rotCW = true;
+        if (e.key === "q" || e.key === "Q") edgeRef.current.rotCCW = true;
+        if (e.key === "e" || e.key === "E") edgeRef.current.rotCW = true;
         if (e.key === "r" || e.key === "R") {
-          gameRef.current = createGame(BOARD_W, BOARD_H, (Math.random() * 0xffffff) | 0);
-          lastHudRef.current = { lines: -1 };
-          if (hudRef.current) {
-            hudRef.current.textContent = `Score: 0 • Level: ${gameRef.current.level}`;
-          }
+          edgeRef.current.restart = true;
           return;
         }
       }
@@ -167,6 +168,96 @@ export default function CanvasGame(): JSX.Element {
     const ku = (e: KeyboardEvent) => onKey(e, false);
     window.addEventListener("keydown", kd);
     window.addEventListener("keyup", ku);
+
+    // Fixed-step loop (always runs so unpause is detectable)
+    const FIXED_DT = 1 / 60;
+    let frames = 0, last = performance.now();
+
+    function runOneFixedStep(withEdges: boolean) {
+      // inject latched edges exactly once per frame
+      if (withEdges) {
+        inputsRef.current.rotCW = edgeRef.current.rotCW;
+        inputsRef.current.rotCCW = edgeRef.current.rotCCW;
+        inputsRef.current.hardDrop = edgeRef.current.hardDrop;
+        // respawn not used here; restart goes through restartGame
+        edgeRef.current.rotCW = edgeRef.current.rotCCW = edgeRef.current.hardDrop = false;
+      } else {
+        inputsRef.current.rotCW = false;
+        inputsRef.current.rotCCW = false;
+        inputsRef.current.hardDrop = false;
+      }
+
+      step(gameRef.current, inputsRef.current, FIXED_DT * 1000, DEFAULT_PARAMS);
+
+      // HUD updates when lines change
+      const s = gameRef.current;
+      if (s.lines !== lastHudRef.current.lines) {
+        if (hudRef.current) {
+          hudRef.current.textContent = `Score: ${s.score.toLocaleString()} • Level: ${s.level}`;
+        }
+        lastHudRef.current = { lines: s.lines };
+      }
+
+      // clear one-shots (safety—already cleared above)
+      inputsRef.current.rotCW = false;
+      inputsRef.current.rotCCW = false;
+      inputsRef.current.hardDrop = false;
+      inputsRef.current.respawn = false;
+    }
+
+    function loop() {
+      const now = performance.now();
+      let dt = (now - tPrevRef.current) / 1000;
+      tPrevRef.current = now;
+
+      // 1) Sample Spud exactly once per rAF
+      sampleGamepadPerFrame();
+
+      // 2) Handle pause/unpause & restart on edges (works even while paused)
+      if (edgeRef.current.pause) {
+        edgeRef.current.pause = false;
+        togglePause();
+      }
+      if (edgeRef.current.restart) {
+        edgeRef.current.restart = false;
+        restartGame();
+      }
+
+      // 3) Fixed update(s)
+      if (runningRef.current) {
+        accRef.current += dt;
+        let firstStep = true;
+        while (accRef.current >= FIXED_DT) {
+          runOneFixedStep(firstStep);  // edges only on first step
+          firstStep = false;
+          accRef.current -= FIXED_DT;
+        }
+      } else {
+        // paused: don’t accumulate; keep inputs clean per frame
+        accRef.current = 0;
+      }
+
+      // 4) Stats & Spud housekeeping
+      frames++;
+      if (now - last > 500) {
+        const fps = Math.round((frames * 1000) / (now - last));
+        frames = 0;
+        last = now;
+        if (statsRef.current) {
+          statsRef.current.textContent =
+            `Pads ${gamepads.playerCount} • DPR ${Math.min(2, window.devicePixelRatio || 1)} • ${fps} FPS`;
+        }
+      }
+
+      // Spud: clear after you’ve consumed buttonJustPressed for this frame
+      gamepads.clearInputs();
+
+      rafGameRef.current = requestAnimationFrame(loop);
+    }
+
+    tPrevRef.current = performance.now();
+    accRef.current = 0;
+    rafGameRef.current = requestAnimationFrame(loop);
 
     function onResize() {
       const c = webglCanvasRef.current!;
@@ -203,18 +294,20 @@ export default function CanvasGame(): JSX.Element {
               boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
             }}
           />
-          <div ref={statsRef}
-               style={{ color: "#cbd5e1", fontFamily: "ui-sans-serif, system-ui", fontSize: 12, textAlign: "center" }}
+          <div
+            ref={statsRef}
+            style={{ color: "#cbd5e1", fontFamily: "ui-sans-serif, system-ui", fontSize: 12, textAlign: "center" }}
           />
         </div>
 
-        {/* HUD simplified: no Lines */}
+        {/* HUD simplified */}
         <div style={{
           minWidth: 200, display: "grid", gap: 12, color: "#e5e7eb",
           fontFamily: "ui-sans-serif, system-ui",
         }}>
-          <div ref={hudRef}
-               style={{ padding: "12px 14px", background: "#0e1626", border: "1px solid #1f2937", borderRadius: 8, fontSize: 16 }}>
+          <div
+            ref={hudRef}
+            style={{ padding: "12px 14px", background: "#0e1626", border: "1px solid #1f2937", borderRadius: 8, fontSize: 16 }}>
             Score: 0 • Level: 0
           </div>
           <div style={{
@@ -222,10 +315,10 @@ export default function CanvasGame(): JSX.Element {
             borderRadius: 8, fontSize: 13, color: "#cbd5e1", lineHeight: 1.5,
           }}>
             Controls:<br />
-            ←/→ move • ↑/Q/E rotate<br />
-            ↓ soft drop <br />
-            Space hard drop<br />
-            R restart • P pause
+            D-Pad / Left-Stick: Move &amp; Soft Drop<br />
+            B(○)=Rotate CW • X(□)=Rotate CCW<br />
+            A(✕)=Hard Drop • Y(△)=Restart<br />
+            Start/Select=Pause • Keyboard still works
           </div>
         </div>
       </div>
