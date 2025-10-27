@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import CanvasGame from "./game/CanvasGame";
 import LocalMultiplayer from "./game/LocalMultiplayer";
 
-import appleFontUrl from "./game/apple-ii.ttf?url";
+import appleFontUrl from "./game/apple-ii.ttf";
 import startUrl from "./game/sfx/start.wav?url"; // ✅ bundle-safe URL to your sound
 
 import {

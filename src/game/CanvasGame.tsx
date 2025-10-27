@@ -1,11 +1,11 @@
 // src/game/CanvasGame.tsx
 import React, { useEffect, useRef, type JSX } from "react";
-import {
-  createGame, step, DEFAULT_PARAMS, type GameState, type Inputs
-} from "@inner-mainframe/game-logic";
-import { createOffscreenCanvas, drawWithShaders, setupWebglCanvas } from "@hackvegas-2025/shared";
+import { createGame, step, type GameState, type Inputs } from "../logic/engine";
+import { DEFAULT_PARAMS } from "../logic/params";          // if you have params.ts
+import { createOffscreenCanvas, drawWithShaders, setupWebglCanvas, Color } from "../vendor-gl/webgl";
 import { makeGameRenderer } from "./makeGameRenderer";
-import { Color } from "@hackvegas-2025/shared";
+
+import { Color } from "../hackvegas-2025/shared";
 import appleFontUrl from "./apple-ii.ttf?url";
 
 // 🔊 sound (SFX)
