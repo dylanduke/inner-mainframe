@@ -1,4 +1,0 @@
-packages:
-  - apps/*
-  - packages/*
-  - vendor/hackvegas-2025/packages/*
